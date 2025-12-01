@@ -47,7 +47,7 @@ def test_http():
         url = f"{IBEAM_URL}/v1/api/iserver/auth/status"
         print(f"📍 Calling: {url}")
 
-        response = requests.post(url, timeout=10, verify=False)
+        response = requests.get(url, timeout=10, verify=False)
 
         print(f"✅ Status Code: {response.status_code}")
         print(f"📦 Response: {response.text}")
