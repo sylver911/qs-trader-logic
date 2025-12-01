@@ -17,7 +17,7 @@ try:
         account_id=account_id,
         cacert=False,
         timeout=10,
-        svc_environment='v1'  # <--- EZ FONTOS!
+        base_route='/v1/api/'  # <--- Ez az API prefix!
     )
 
     print("✅ Client initialized")
@@ -36,6 +36,23 @@ try:
     print("\n=== 👤 Accounts ===")
     accounts = client.portfolio_accounts()
     print(f"Accounts: {accounts.data}")
+
+    # Ledger
+    print("\n=== 💰 Balance ===")
+    ledger = client.get_ledger()
+    for currency, subledger in ledger.data.items():
+        print(f"  {currency}:")
+        print(f"    Cash: ${subledger.get('cashbalance', 0)}")
+        print(f"    Net Liq: ${subledger.get('netliquidationvalue', 0)}")
+
+    # Positions
+    print("\n=== 📈 Positions ===")
+    positions = client.positions()
+    if positions.data:
+        for pos in positions.data:
+            print(f"  {pos.get('ticker')}: {pos.get('position')} @ ${pos.get('mktValue')}")
+    else:
+        print("  No positions")
 
     print("\n✅✅✅ ALL CHECKS PASSED! ✅✅✅")
 
