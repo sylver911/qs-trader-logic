@@ -1,47 +1,73 @@
 import os
-from ibind import IbkrClient
+from ibind_adapter import IBTradingClient
 
-# Railway-n a belső cím általában így néz ki: servicename.railway.internal:5000
-# De ha IBEAM_ADDRESS-ben domain van (pl. ibeam-production.up.railway.app),
-# akkor HTTPS-t kell használni
+# IBeam címe Railway-ről
+ibeam_url = os.getenv('IBEAM_ADDRESS', 'localhost:5000')
 
-ibeam_address = os.getenv('IBEAM_ADDRESS', 'localhost:5000')
+# Tisztítsd meg a címet
+ibeam_url = ibeam_url.strip().replace('{{', '').replace('}}', '')
 
-# Ha nem tartalmaz http-t, adjuk hozzá
-if not ibeam_address.startswith('http'):
-    # Railway domain esetén HTTPS, különben HTTP
-    if 'railway.app' in ibeam_address:
-        base_url = f'https://{ibeam_address}'
-    else:
-        base_url = f'http://{ibeam_address}'
-else:
-    base_url = ibeam_address
+# Protokoll hozzáadása
+if not ibeam_url.startswith('http'):
+    ibeam_url = f'http://{ibeam_url}'
 
-print(f"Connecting to IBeam at: {base_url}")
-
-# IbkrClient létrehozása
-client = IbkrClient(base_url=base_url)
+print(f"Connecting to IBeam at: {ibeam_url}")
 
 try:
-    # 1. Authentikációs státusz ellenőrzése
-    print("\n=== Authentication Status ===")
-    auth_status = client.tickle()
-    print(f"Auth status: {auth_status}")
+    # Client létrehozása
+    # FIGYELEM: account_id-t add meg env variable-ből vagy itt hardcode-olva
+    client = IBTradingClient(
+        account_id=os.getenv('IB_ACCOUNT_ID', 'YOUR_ACCOUNT_ID_HERE'),
+        base_url=ibeam_url,
+        cacert=None,  # Railway-n nincs cacert
+        log_level='INFO',
+        auto_confirm_orders=True
+    )
 
-    # 2. Portfolio accounts lekérdezése
-    print("\n=== Portfolio Accounts ===")
-    accounts = client.portfolio_accounts()
+    # 1. Connection check
+    print("\n=== Connection Check ===")
+    if client.check_connection():
+        print("✅ Gateway is healthy!")
+    else:
+        print("❌ Gateway health check failed")
+        exit(1)
+
+    # 2. Tickle (session keep-alive)
+    print("\n=== Tickle ===")
+    tickle_response = client.tickle()
+    print(f"Tickle response: {tickle_response}")
+
+    # 3. Account info
+    print("\n=== Accounts ===")
+    accounts = client.get_accounts()
     print(f"Accounts: {accounts}")
 
-    # 3. Account summary (ha van account)
-    if accounts:
-        account_id = accounts[0].get('accountId')
-        print(f"\n=== Account Summary for {account_id} ===")
-        summary = client.portfolio_account_summary(account_id=account_id)
-        print(f"Summary: {summary}")
+    # 4. Balance
+    print("\n=== Balance ===")
+    balance = client.get_account_balance()
+    for currency, data in balance.items():
+        print(f"{currency}: Net Liquidation = ${data['net_liquidation']:.2f}")
 
-    print("\n✅ Connection successful!")
+    # 5. Positions
+    print("\n=== Positions ===")
+    positions = client.get_positions()
+    if positions:
+        for pos in positions:
+            print(f"{pos.ticker}: {pos.quantity} shares @ ${pos.avg_price:.2f} | P/L: ${pos.unrealized_pnl:.2f}")
+    else:
+        print("No positions")
+
+    # 6. Live orders
+    print("\n=== Live Orders ===")
+    live_orders = client.get_live_orders()
+    print(f"Live orders: {len(live_orders)}")
+    for order in live_orders[:3]:  # Show first 3
+        print(f"  {order.symbol} {order.side} {order.quantity} @ {order.order_type} - Status: {order.status}")
+
+    print("\n✅ All checks passed!")
 
 except Exception as e:
     print(f"\n❌ Error: {e}")
-    print(f"Make sure IBeam is running and accessible at {base_url}")
+    import traceback
+
+    traceback.print_exc()
