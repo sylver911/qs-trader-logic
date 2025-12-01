@@ -78,7 +78,7 @@ def test_ibind():
         print(f"📊 Account: {ACCOUNT_ID}")
 
         client = IbkrClient(
-            url=IBEAM_URL,
+            url=f"{IBEAM_URL}/v1/api/",
             account_id=ACCOUNT_ID,
             cacert=False,
             timeout=10
