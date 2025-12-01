@@ -1,13 +1,11 @@
 import os
+import requests
 from flask import Flask, jsonify
-from ibind import IbkrClient, ibind_logs_initialize
-
-ibind_logs_initialize(log_to_file=False)
 
 app = Flask(__name__)
 
 # Config
-IBEAM_URL = os.getenv('IBEAM_URL', 'http://ibeam-deploy.railway.internal:5000')
+IBEAM_URL = os.getenv('IBEAM_URL', 'https://ibeam-deploy-production.up.railway.app')
 ACCOUNT_ID = os.getenv('IB_ACCOUNT_ID', 'DU8875169')
 
 print(f"🚀 Server starting...")
@@ -19,13 +17,10 @@ print(f"📊 Account ID: {ACCOUNT_ID}")
 def index():
     return jsonify({
         "status": "running",
-        "message": "Call /test to test IBeam connection",
+        "message": "Call /test to test IBeam auth status",
         "endpoints": {
             "health": "/health",
-            "test": "/test",
-            "accounts": "/accounts",
-            "balance": "/balance",
-            "positions": "/positions"
+            "test": "/test"
         }
     })
 
@@ -36,25 +31,24 @@ def health():
 
 
 @app.route('/test')
-def test_connection():
-    """On-demand IBeam connection test"""
+def test_auth_status():
+    """Test IBeam auth status endpoint"""
     try:
-        print("\n🔄 Testing IBeam connection...")
+        print("\n🔄 Testing IBeam auth status...")
 
-        client = IbkrClient(
-            url=IBEAM_URL,
-            account_id=ACCOUNT_ID,
-            cacert=False,
-            timeout=10
-        )
+        url = f"{IBEAM_URL}/v1/api/iserver/auth/status"
+        print(f"📍 Calling: {url}")
 
-        # Tickle
-        tickle = client.tickle()
+        response = requests.post(url, timeout=10, verify=False)
+
+        print(f"✅ Status Code: {response.status_code}")
+        print(f"📦 Response: {response.text}")
 
         return jsonify({
             "success": True,
-            "tickle": tickle.data,
-            "message": "IBeam connection successful!"
+            "status_code": response.status_code,
+            "response": response.json() if response.status_code == 200 else response.text,
+            "url": url
         })
 
     except Exception as e:
@@ -62,101 +56,7 @@ def test_connection():
         return jsonify({
             "success": False,
             "error": str(e),
-            "message": "IBeam connection failed"
-        }), 500
-
-
-@app.route('/accounts')
-def get_accounts():
-    """Get accounts"""
-    try:
-        client = IbkrClient(
-            url=IBEAM_URL,
-            account_id=ACCOUNT_ID,
-            cacert=False,
-            timeout=10
-        )
-
-        accounts = client.portfolio_accounts()
-
-        return jsonify({
-            "success": True,
-            "accounts": accounts.data
-        })
-
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-
-@app.route('/balance')
-def get_balance():
-    """Get balance"""
-    try:
-        client = IbkrClient(
-            url=IBEAM_URL,
-            account_id=ACCOUNT_ID,
-            cacert=False,
-            timeout=10
-        )
-
-        ledger = client.get_ledger()
-
-        balance_data = {}
-        for currency, subledger in ledger.data.items():
-            balance_data[currency] = {
-                "cash": subledger.get('cashbalance', 0),
-                "net_liquidation": subledger.get('netliquidationvalue', 0),
-                "stock_market_value": subledger.get('stockmarketvalue', 0)
-            }
-
-        return jsonify({
-            "success": True,
-            "balance": balance_data
-        })
-
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
-
-
-@app.route('/positions')
-def get_positions():
-    """Get positions"""
-    try:
-        client = IbkrClient(
-            url=IBEAM_URL,
-            account_id=ACCOUNT_ID,
-            cacert=False,
-            timeout=10
-        )
-
-        positions = client.positions()
-
-        positions_data = []
-        if positions.data:
-            for pos in positions.data:
-                positions_data.append({
-                    "ticker": pos.get('ticker'),
-                    "quantity": pos.get('position'),
-                    "market_value": pos.get('mktValue'),
-                    "avg_price": pos.get('avgPrice')
-                })
-
-        return jsonify({
-            "success": True,
-            "positions": positions_data,
-            "count": len(positions_data)
-        })
-
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
+            "url": f"{IBEAM_URL}/v1/api/iserver/auth/status"
         }), 500
 
 
