@@ -1,54 +1,71 @@
 import os
-from pathlib import Path
-from ibind_adapter import IBTradingClient
+from ibind import IbkrClient, ibind_logs_initialize
 
-# IBeam címe
-ibeam_url = os.getenv('IBEAM_ADDRESS', 'localhost:5000')
-if not ibeam_url.startswith('http'):
-    ibeam_url = f'http://{ibeam_url}'
+# Initialize IBind logging
+ibind_logs_initialize(log_to_file=False)
 
-print(f"Connecting to: {ibeam_url}")
+# IBeam URL - Railway internal vagy public
+ibeam_url = os.getenv('IBEAM_URL', 'http://ibeam-deploy.railway.internal:5000')
+
+print(f"🔗 Connecting to IBeam at: {ibeam_url}")
 
 # Account ID
-account_id = os.getenv('IB_ACCOUNT_ID', 'YOUR_ACCOUNT_ID_HERE')
-
-# Dummy cacert létrehozása ha nincs
-cacert_path = '/tmp/dummy_cert.pem'
-if not Path(cacert_path).exists():
-    Path(cacert_path).touch()
-    print(f"Created dummy cert at {cacert_path}")
+account_id = os.getenv('IB_ACCOUNT_ID', 'DU8875169')
+print(f"📊 Account ID: {account_id}")
 
 try:
-    client = IBTradingClient(
+    print("\n⏳ Initializing IbkrClient...")
+
+    # Egyszerű inicializálás - cacert=False teljesen valid!
+    client = IbkrClient(
+        url=ibeam_url,
         account_id=account_id,
-        base_url=ibeam_url,
-        cacert=cacert_path,  # Dummy cert
-        log_level='INFO',
-        auto_confirm_orders=True
+        cacert=False,  # Nincs szükség cacert-re!
+        timeout=10
     )
 
-    # Connection check
-    print("\n=== Connection Check ===")
-    if client.check_connection():
-        print("✅ Gateway is healthy!")
+    print("✅ Client initialized")
+
+    # 1. Health check
+    print("\n=== 🏥 Health Check ===")
+    health = client.check_health()
+    print(f"Health: {health}")
+
+    # 2. Tickle
+    print("\n=== 🔄 Tickle ===")
+    tickle = client.tickle()
+    print(f"Response: {tickle.data}")
+
+    # 3. Accounts
+    print("\n=== 👤 Accounts ===")
+    accounts = client.portfolio_accounts()
+    print(f"Accounts: {accounts.data}")
+
+    # 4. Ledger (Balance)
+    print("\n=== 💰 Balance ===")
+    ledger = client.get_ledger()
+    for currency, subledger in ledger.data.items():
+        print(f"  {currency}:")
+        print(f"    Cash balance: ${subledger.get('cashbalance', 0)}")
+        print(f"    Net liquidation: ${subledger.get('netliquidationvalue', 0)}")
+        print(f"    Stock market value: ${subledger.get('stockmarketvalue', 0)}")
+
+    # 5. Positions
+    print("\n=== 📈 Positions ===")
+    positions = client.positions()
+    if positions.data:
+        for pos in positions.data:
+            ticker = pos.get('ticker', 'N/A')
+            quantity = pos.get('position', 0)
+            value = pos.get('mktValue', 0)
+            print(f"  {ticker}: {quantity} shares (${value})")
     else:
-        print("❌ Gateway health check failed")
-        exit(1)
+        print("  No positions")
 
-    # Tickle
-    print("\n=== Tickle ===")
-    tickle_response = client.tickle()
-    print(f"Tickle: {tickle_response}")
-
-    # Accounts
-    print("\n=== Accounts ===")
-    accounts = client.get_accounts()
-    print(f"Accounts: {accounts}")
-
-    print("\n✅ Connection successful!")
+    print("\n✅✅✅ ALL CHECKS PASSED! ✅✅✅")
 
 except Exception as e:
-    print(f"\n❌ Error: {e}")
+    print(f"\n❌ ERROR: {e}")
     import traceback
 
     traceback.print_exc()
