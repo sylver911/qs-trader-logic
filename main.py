@@ -71,7 +71,7 @@ def test_http():
 
 @app.route('/test-ibind')
 def test_ibind():
-    """Test with IBind client"""
+    """Test with IBind client - Portfolio data"""
     try:
         print("\n🔄 Testing with IBind...")
         print(f"📍 URL: {IBEAM_URL}")
@@ -86,21 +86,46 @@ def test_ibind():
 
         print("✅ IbkrClient initialized")
 
-        # Tickle
-        print("📍 Calling tickle()...")
-        tickle = client.tickle()
-        print(f"✅ Tickle response: {tickle.data}")
-
         # Accounts
         print("📍 Calling portfolio_accounts()...")
         accounts = client.portfolio_accounts()
         print(f"✅ Accounts: {accounts.data}")
 
+        # Ledger (Balance)
+        print("📍 Calling get_ledger()...")
+        ledger = client.get_ledger()
+        print(f"✅ Ledger retrieved")
+
+        balance_data = {}
+        for currency, subledger in ledger.data.items():
+            balance_data[currency] = {
+                "cash": subledger.get('cashbalance', 0),
+                "net_liquidation": subledger.get('netliquidationvalue', 0),
+                "stock_market_value": subledger.get('stockmarketvalue', 0)
+            }
+
+        # Positions
+        print("📍 Calling positions()...")
+        positions = client.positions()
+        print(f"✅ Positions retrieved")
+
+        positions_data = []
+        if positions.data:
+            for pos in positions.data:
+                positions_data.append({
+                    "ticker": pos.get('ticker'),
+                    "quantity": pos.get('position'),
+                    "market_value": pos.get('mktValue'),
+                    "avg_price": pos.get('avgPrice')
+                })
+
         return jsonify({
             "success": True,
             "method": "ibind",
-            "tickle": tickle.data,
-            "accounts": accounts.data
+            "accounts": accounts.data,
+            "balance": balance_data,
+            "positions": positions_data,
+            "positions_count": len(positions_data)
         })
 
     except Exception as e:
@@ -119,4 +144,3 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', 8080))
     print(f"\n🌐 Starting server on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
-
