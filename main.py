@@ -16,21 +16,17 @@ try:
         url=ibeam_url,
         account_id=account_id,
         cacert=False,
-        timeout=10,
-        base_route='/v1/api/'  # <--- Ez az API prefix!
+        timeout=10
     )
 
     print("✅ Client initialized")
 
-    # Health check
-    print("\n=== 🏥 Health Check ===")
-    health = client.check_health()
-    print(f"Health: {health}")
+    # NE használd check_health()-t! Az nem működik!
+    # Helyette egyből tickle():
 
-    # Tickle
     print("\n=== 🔄 Tickle ===")
     tickle = client.tickle()
-    print(f"Response: {tickle.data}")
+    print(f"✅ Tickle response: {tickle.data}")
 
     # Accounts
     print("\n=== 👤 Accounts ===")
