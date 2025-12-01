@@ -1,59 +1,167 @@
 import os
+from flask import Flask, jsonify
 from ibind import IbkrClient, ibind_logs_initialize
 
 ibind_logs_initialize(log_to_file=False)
 
-ibeam_url = os.getenv('IBEAM_URL', 'http://ibeam-deploy.railway.internal:5000')
-print(f"🔗 Connecting to IBeam at: {ibeam_url}")
+app = Flask(__name__)
 
-account_id = os.getenv('IB_ACCOUNT_ID', 'DU8875169')
-print(f"📊 Account ID: {account_id}")
+# Config
+IBEAM_URL = os.getenv('IBEAM_URL', 'http://ibeam-deploy.railway.internal:5000')
+ACCOUNT_ID = os.getenv('IB_ACCOUNT_ID', 'DU8875169')
 
-try:
-    print("\n⏳ Initializing IbkrClient...")
+print(f"🚀 Server starting...")
+print(f"📡 IBeam URL: {IBEAM_URL}")
+print(f"📊 Account ID: {ACCOUNT_ID}")
 
-    client = IbkrClient(
-        url=ibeam_url,
-        account_id=account_id,
-        cacert=False,
-        timeout=10
-    )
 
-    print("✅ Client initialized")
+@app.route('/')
+def index():
+    return jsonify({
+        "status": "running",
+        "message": "Call /test to test IBeam connection",
+        "endpoints": {
+            "health": "/health",
+            "test": "/test",
+            "accounts": "/accounts",
+            "balance": "/balance",
+            "positions": "/positions"
+        }
+    })
 
-    # NE használd check_health()-t! Az nem működik!
-    # Helyette egyből tickle():
 
-    print("\n=== 🔄 Tickle ===")
-    tickle = client.tickle()
-    print(f"✅ Tickle response: {tickle.data}")
+@app.route('/health')
+def health():
+    return jsonify({"status": "ok"})
 
-    # Accounts
-    print("\n=== 👤 Accounts ===")
-    accounts = client.portfolio_accounts()
-    print(f"Accounts: {accounts.data}")
 
-    # Ledger
-    print("\n=== 💰 Balance ===")
-    ledger = client.get_ledger()
-    for currency, subledger in ledger.data.items():
-        print(f"  {currency}:")
-        print(f"    Cash: ${subledger.get('cashbalance', 0)}")
-        print(f"    Net Liq: ${subledger.get('netliquidationvalue', 0)}")
+@app.route('/test')
+def test_connection():
+    """On-demand IBeam connection test"""
+    try:
+        print("\n🔄 Testing IBeam connection...")
 
-    # Positions
-    print("\n=== 📈 Positions ===")
-    positions = client.positions()
-    if positions.data:
-        for pos in positions.data:
-            print(f"  {pos.get('ticker')}: {pos.get('position')} @ ${pos.get('mktValue')}")
-    else:
-        print("  No positions")
+        client = IbkrClient(
+            url=IBEAM_URL,
+            account_id=ACCOUNT_ID,
+            cacert=False,
+            timeout=10
+        )
 
-    print("\n✅✅✅ ALL CHECKS PASSED! ✅✅✅")
+        # Tickle
+        tickle = client.tickle()
 
-except Exception as e:
-    print(f"\n❌ ERROR: {e}")
-    import traceback
+        return jsonify({
+            "success": True,
+            "tickle": tickle.data,
+            "message": "IBeam connection successful!"
+        })
 
-    traceback.print_exc()
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "message": "IBeam connection failed"
+        }), 500
+
+
+@app.route('/accounts')
+def get_accounts():
+    """Get accounts"""
+    try:
+        client = IbkrClient(
+            url=IBEAM_URL,
+            account_id=ACCOUNT_ID,
+            cacert=False,
+            timeout=10
+        )
+
+        accounts = client.portfolio_accounts()
+
+        return jsonify({
+            "success": True,
+            "accounts": accounts.data
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/balance')
+def get_balance():
+    """Get balance"""
+    try:
+        client = IbkrClient(
+            url=IBEAM_URL,
+            account_id=ACCOUNT_ID,
+            cacert=False,
+            timeout=10
+        )
+
+        ledger = client.get_ledger()
+
+        balance_data = {}
+        for currency, subledger in ledger.data.items():
+            balance_data[currency] = {
+                "cash": subledger.get('cashbalance', 0),
+                "net_liquidation": subledger.get('netliquidationvalue', 0),
+                "stock_market_value": subledger.get('stockmarketvalue', 0)
+            }
+
+        return jsonify({
+            "success": True,
+            "balance": balance_data
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/positions')
+def get_positions():
+    """Get positions"""
+    try:
+        client = IbkrClient(
+            url=IBEAM_URL,
+            account_id=ACCOUNT_ID,
+            cacert=False,
+            timeout=10
+        )
+
+        positions = client.positions()
+
+        positions_data = []
+        if positions.data:
+            for pos in positions.data:
+                positions_data.append({
+                    "ticker": pos.get('ticker'),
+                    "quantity": pos.get('position'),
+                    "market_value": pos.get('mktValue'),
+                    "avg_price": pos.get('avgPrice')
+                })
+
+        return jsonify({
+            "success": True,
+            "positions": positions_data,
+            "count": len(positions_data)
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+if __name__ == '__main__':
+    port = int(os.getenv('PORT', 8000))
+    print(f"\n🌐 Starting server on port {port}")
+    print(f"📍 Test endpoint: http://localhost:{port}/test")
+    app.run(host='0.0.0.0', port=port, debug=False)
