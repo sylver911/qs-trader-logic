@@ -65,11 +65,16 @@ class TradingService:
             # 3. Get market data
             market_data = self._get_market_data(signal.ticker)
 
-            # 4. Get portfolio state
-            portfolio = self._portfolio_tools.get_portfolio_summary()
+            # 4. Get portfolio state (skip in dry run)
+            if trading_config.execute_orders:
+                portfolio = self._portfolio_tools.get_portfolio_summary()
+                portfolio_data = portfolio.to_dict() if portfolio else {}
+            else:
+                logger.debug("Dry run mode - using empty portfolio")
+                portfolio_data = {"positions": [], "cash": 100000, "pnl": 0}
 
-            # 5. Analyze with AI
-            ai_response = self._analyze_with_ai(signal, market_data, portfolio.to_dict())
+            # 5. Analyze with AI (iterative tool calling)
+            ai_response = self._analyze_with_ai(signal, market_data, portfolio_data)
 
             # 6. Execute if needed
             if ai_response.decision.action == TradeAction.EXECUTE:
@@ -119,6 +124,11 @@ class TradingService:
         if signal.confidence and signal.confidence < trading_config.min_ai_confidence_score:
             return f"Signal confidence {signal.confidence:.0%} below minimum"
 
+        # Skip IBKR checks in dry run mode
+        if not trading_config.execute_orders:
+            logger.debug("Dry run mode - skipping IBKR validation")
+            return None
+
         vix = self._market_data.get_vix()
         if vix and vix > trading_config.max_vix_level:
             return f"VIX {vix:.1f} above maximum {trading_config.max_vix_level}"
@@ -141,7 +151,7 @@ class TradingService:
         market_data: Dict[str, Any],
         portfolio_data: Dict[str, Any],
     ) -> AIResponse:
-        """Analyze signal with AI."""
+        """Analyze signal with AI using iterative tool calling."""
         tools = (
             MarketTools.get_tool_definitions()
             + PortfolioTools.get_tool_definitions()
@@ -156,6 +166,7 @@ class TradingService:
 
         trading_params = trading_config.get_all()
 
+        # Initial LLM call
         response = self._llm.analyze_signal(
             signal_data=signal.to_dict(),
             market_data=market_data,
@@ -164,17 +175,75 @@ class TradingService:
             tools=tools,
         )
 
-        if response.get("tool_calls"):
+        # Build message history for multi-turn conversation
+        messages = [
+            {"role": "system", "content": self._llm._get_system_prompt()},
+            {"role": "user", "content": response.get("_prompt", "")},
+        ]
+
+        # Iterative tool calling loop (max 10 iterations)
+        max_iterations = 10
+        iteration = 0
+
+        while response.get("tool_calls") and iteration < max_iterations:
+            iteration += 1
+            logger.info(f"Tool call iteration {iteration}, {len(response['tool_calls'])} tools")
+
+            # Execute tool calls
             tool_results = self._llm.execute_tool_calls(
                 response["tool_calls"],
                 handlers,
             )
+
             for result in tool_results:
                 if result["success"]:
                     logger.info(f"Tool executed: {result['function']}")
                 else:
-                    logger.warning(f"Tool failed: {result['function']}")
+                    logger.warning(f"Tool failed: {result['function']} - {result.get('error')}")
 
+            # Add assistant message with tool calls to history
+            assistant_msg = {
+                "role": "assistant",
+                "content": response.get("content") or "",
+            }
+
+            # Add tool_calls to assistant message
+            if response.get("tool_calls"):
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["function"],
+                            "arguments": json.dumps(tc["arguments"]),
+                        }
+                    }
+                    for tc in response["tool_calls"]
+                ]
+
+            messages.append(assistant_msg)
+
+            # Add tool results to history
+            for result in tool_results:
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": result["call_id"],
+                    "content": json.dumps(
+                        result.get("result") if result["success"]
+                        else {"error": result.get("error")}
+                    ),
+                })
+
+            # Continue conversation with tool results
+            response = self._llm.continue_with_tool_results(
+                messages=messages,
+                tools=tools,
+            )
+
+        if iteration >= max_iterations:
+            logger.warning(f"Max tool call iterations ({max_iterations}) reached")
+
+        # Parse final decision from response
         decision = self._parse_decision(response.get("content", ""))
 
         return AIResponse(

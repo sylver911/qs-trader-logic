@@ -87,7 +87,7 @@ class LLMClient:
             "config": trading_params,
         }
 
-        prompt = self.render_prompt("signal_analysis.jinja2", context)
+        prompt = self.render_prompt("signal_analysis.j2", context)
 
         logger.debug(f"Sending prompt to {model}")
         logger.debug(f"Prompt length: {len(prompt)} chars")
@@ -134,6 +134,7 @@ class LLMClient:
                 "content": content,
                 "tool_calls": tool_calls,
                 "model": model,
+                "_prompt": prompt,  # Store for message history
                 "usage": {
                     "prompt_tokens": response.usage.prompt_tokens,
                     "completion_tokens": response.usage.completion_tokens,
@@ -168,14 +169,14 @@ You have access to tools for:
 
 For each signal, you should:
 1. Analyze the signal content and extracted parameters
-2. Check current market conditions
+2. Check current market conditions using tools
 3. Verify trading rules and limits
 4. Decide whether to SKIP, EXECUTE, or MODIFY the trade
 5. If executing, use the appropriate tools to place the order
 
 Always provide clear reasoning for your decisions. Be conservative with risk management.
 
-Response format when not using tools:
+IMPORTANT: After using tools and gathering information, you MUST provide your final decision in this JSON format:
 {
     "action": "skip" | "execute" | "modify",
     "reasoning": "Your detailed reasoning",
@@ -240,31 +241,21 @@ Response format when not using tools:
 
     def continue_with_tool_results(
         self,
-        original_messages: List[Dict[str, Any]],
-        tool_results: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
         model: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Continue conversation with tool results.
+        """Continue conversation after tool execution.
 
         Args:
-            original_messages: Previous messages
-            tool_results: Results from tool execution
+            messages: Full message history including tool results
+            tools: Available tools for further calls
             model: Model to use
 
         Returns:
-            AI response
+            AI response (may contain more tool_calls)
         """
         model = model or trading_config.current_llm_model
-
-        # Add tool results to messages
-        messages = original_messages.copy()
-
-        for result in tool_results:
-            messages.append({
-                "role": "tool",
-                "tool_call_id": result["call_id"],
-                "content": json.dumps(result.get("result", result.get("error"))),
-            })
 
         try:
             response = completion(
@@ -272,15 +263,33 @@ Response format when not using tools:
                 messages=messages,
                 api_base=self._api_base,
                 api_key=self._api_key or "dummy",
+                tools=tools,
+                tool_choice="auto" if tools else None,
                 temperature=0.3,
                 max_tokens=2000,
             )
 
+            message = response.choices[0].message
+            content = message.content or ""
+
+            # Check for more tool calls
+            tool_calls = []
+            if hasattr(message, "tool_calls") and message.tool_calls:
+                tool_calls = [
+                    {
+                        "id": tc.id,
+                        "function": tc.function.name,
+                        "arguments": json.loads(tc.function.arguments),
+                    }
+                    for tc in message.tool_calls
+                ]
+
             return {
-                "content": response.choices[0].message.content or "",
+                "content": content,
+                "tool_calls": tool_calls,
                 "model": model,
             }
 
         except Exception as e:
             logger.error(f"Continue call failed: {e}")
-            return {"content": "", "error": str(e)}
+            return {"content": "", "tool_calls": [], "error": str(e)}
