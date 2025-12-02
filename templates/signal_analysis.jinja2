@@ -1,0 +1,19 @@
+{# DeepSeek Reasoner - Signal only, tools available #}
+
+## SIGNAL
+
+**{{ signal.ticker }}** {{ signal.direction }}
+{% if signal.strike %}{{ signal.expiry }} ${{ '{:.0f}'.format(signal.strike) }} {{ signal.direction }}{% endif %}
+
+Entry: ${{ '{:.2f}'.format(signal.entry_price) if signal.entry_price else 'MARKET' }}
+{% if signal.target_price %}Target: ${{ '{:.2f}'.format(signal.target_price) }}{% endif %}
+{% if signal.stop_loss %}Stop: ${{ '{:.2f}'.format(signal.stop_loss) }}{% endif %}
+
+{% if signal.full_content %}
+Raw:
+{{ signal.full_content }}
+{% endif %}
+
+---
+
+Analyze this signal. Use tools to verify. Decide: execute or skip.

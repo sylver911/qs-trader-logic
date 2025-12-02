@@ -1,0 +1,175 @@
+{
+  "0": {
+    "key": "risk_per_trade_percent",
+    "value": 0.02,
+    "description": "Maximum portfolio risk per single trade"
+  },
+  "1": {
+    "key": "max_daily_trades",
+    "value": 10,
+    "description": "Maximum number of trades per day"
+  },
+  "2": {
+    "key": "max_concurrent_positions",
+    "value": 5,
+    "description": "Maximum open positions at once"
+  },
+  "3": {
+    "key": "max_loss_per_day_percent",
+    "value": 0.05,
+    "description": "Stop trading if daily loss exceeds this"
+  },
+  "4": {
+    "key": "fetch_channel_list",
+    "value": [
+      "signals-free",
+      "signals-premium",
+      "vip-alerts"
+    ],
+    "description": "Discord channels to monitor"
+  },
+  "5": {
+    "key": "enabled_signal_sources",
+    "value": [
+      "QuantSignals",
+      "UnusualWhales",
+      "ManualEntry"
+    ],
+    "description": "Which signal sources to process"
+  },
+  "6": {
+    "key": "trading_start_time",
+    "value": "09:30",
+    "description": "Start trading at this time"
+  },
+  "7": {
+    "key": "trading_end_time",
+    "value": "15:45",
+    "description": "Stop trading at this time"
+  },
+  "8": {
+    "key": "allow_overnight_positions",
+    "value": false,
+    "description": "Hold positions after market close"
+  },
+  "9": {
+    "key": "min_dte",
+    "value": 0,
+    "description": "Minimum days to expiration"
+  },
+  "10": {
+    "key": "max_dte",
+    "value": 7,
+    "description": "Maximum days to expiration"
+  },
+  "11": {
+    "key": "min_option_price",
+    "value": 0.1,
+    "description": "Minimum premium to consider"
+  },
+  "12": {
+    "key": "max_option_price",
+    "value": 10,
+    "description": "Maximum premium to pay"
+  },
+  "13": {
+    "key": "min_liquidity_volume",
+    "value": 100,
+    "description": "Minimum daily volume for option"
+  },
+  "14": {
+    "key": "default_stop_loss_percent",
+    "value": 0.3,
+    "description": "Default stop loss if not specified in signal"
+  },
+  "15": {
+    "key": "default_take_profit_percent",
+    "value": 0.5,
+    "description": "Default take profit if not specified"
+  },
+  "16": {
+    "key": "trailing_stop_enabled",
+    "value": true,
+    "description": "Use trailing stop after profit threshold"
+  },
+  "17": {
+    "key": "trailing_stop_activation_percent",
+    "value": 0.2,
+    "description": "Profit % to activate trailing stop"
+  },
+  "18": {
+    "key": "trailing_stop_distance_percent",
+    "value": 0.1,
+    "description": "Distance from peak to trail"
+  },
+  "19": {
+    "key": "require_ai_validation",
+    "value": true,
+    "description": "LiteLLM must validate signal before trading"
+  },
+  "20": {
+    "key": "min_ai_confidence_score",
+    "value": 0.7,
+    "description": "Minimum AI confidence to execute"
+  },
+  "21": {
+    "key": "block_similar_signals_minutes",
+    "value": 5,
+    "description": "Ignore duplicate signals within X minutes"
+  },
+  "22": {
+    "key": "allowed_strategies",
+    "value": [
+      "CALL",
+      "PUT",
+      "IRON_CONDOR",
+      "SPREAD"
+    ],
+    "description": "Which option strategies to trade"
+  },
+  "23": {
+    "key": "blacklist_tickers",
+    "value": [
+      "TSLA",
+      "GME"
+    ],
+    "description": "Never trade these symbols"
+  },
+  "24": {
+    "key": "whitelist_tickers",
+    "value": [],
+    "description": "Only trade these symbols (if not empty)"
+  },
+  "25": {
+    "key": "min_account_balance",
+    "value": 1000,
+    "description": "Stop trading if balance drops below"
+  },
+  "26": {
+    "key": "max_position_size_percent",
+    "value": 0.2,
+    "description": "Maximum % of portfolio in single position"
+  },
+  "27": {
+    "key": "emergency_stop",
+    "value": false,
+    "description": "Kill switch - stop all trading immediately"
+  },
+  "28": {
+    "key": "order_type",
+    "value": "LIMIT",
+    "description": "Default order type"
+  },
+  "29": {
+    "key": "limit_order_offset_percent",
+    "value": 0.02,
+    "description": "Limit price offset from mid price"
+  },
+  "30": {
+    "key": "order_timeout_seconds",
+    "value": 30,
+    "description": "Cancel unfilled orders after X seconds"
+  },
+  "_id": "691f8660c676799c799dc29d",
+  "hello": "world"
+}

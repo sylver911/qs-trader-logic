@@ -87,7 +87,7 @@ class LLMClient:
             "config": trading_params,
         }
 
-        prompt = self.render_prompt("signal_analysis.j2", context)
+        prompt = self.render_prompt("signal_analysis.jinja2", context)
 
         logger.debug(f"Sending prompt to {model}")
         logger.debug(f"Prompt length: {len(prompt)} chars")
