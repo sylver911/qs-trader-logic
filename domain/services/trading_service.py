@@ -207,6 +207,10 @@ class TradingService:
                 "content": response.get("content") or "",
             }
 
+            # IMPORTANT: DeepSeek Reasoner requires reasoning_content in assistant message
+            if response.get("reasoning_content"):
+                assistant_msg["reasoning_content"] = response["reasoning_content"]
+
             # Add tool_calls to assistant message
             if response.get("tool_calls"):
                 assistant_msg["tool_calls"] = [

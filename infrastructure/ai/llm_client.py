@@ -130,9 +130,15 @@ class LLMClient:
                     for tc in message.tool_calls
                 ]
 
+            # Extract reasoning_content for DeepSeek Reasoner
+            reasoning_content = getattr(message, "reasoning_content", None)
+            if not reasoning_content and hasattr(message, "provider_specific_fields"):
+                reasoning_content = message.provider_specific_fields.get("reasoning_content")
+
             result = {
                 "content": content,
                 "tool_calls": tool_calls,
+                "reasoning_content": reasoning_content,  # Required for DeepSeek Reasoner
                 "model": model,
                 "_prompt": prompt,  # Store for message history
                 "usage": {
@@ -284,9 +290,15 @@ IMPORTANT: After using tools and gathering information, you MUST provide your fi
                     for tc in message.tool_calls
                 ]
 
+            # Extract reasoning_content for DeepSeek Reasoner
+            reasoning_content = getattr(message, "reasoning_content", None)
+            if not reasoning_content and hasattr(message, "provider_specific_fields"):
+                reasoning_content = message.provider_specific_fields.get("reasoning_content")
+
             return {
                 "content": content,
                 "tool_calls": tool_calls,
+                "reasoning_content": reasoning_content,  # Required for DeepSeek Reasoner
                 "model": model,
             }
 
