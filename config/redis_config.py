@@ -32,6 +32,7 @@ class TradingConfig:
         "emergency_stop": False,
         "max_vix_level": 25,
         "current_llm_model": "deepseek/deepseek-reasoner",
+        "execute_orders": False,  # If False, simulates orders without sending to IBeam
     }
 
     def __init__(self, redis_url: str = None):
@@ -157,6 +158,11 @@ class TradingConfig:
     def current_llm_model(self) -> str:
         return self._get_value("current_llm_model", str)
 
+    @property
+    def execute_orders(self) -> bool:
+        """If False, simulates orders without sending to IBeam (dry run mode)."""
+        return self._get_value("execute_orders", bool)
+
     # Setters for dynamic updates (Discord bot will use these)
     def set(self, key: str, value: Any) -> bool:
         """Set a config value.
@@ -195,6 +201,7 @@ class TradingConfig:
             "emergency_stop": self.emergency_stop,
             "max_vix_level": self.max_vix_level,
             "current_llm_model": self.current_llm_model,
+            "execute_orders": self.execute_orders,
         }
 
     def close(self) -> None:

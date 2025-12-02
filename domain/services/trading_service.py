@@ -228,6 +228,15 @@ class TradingService:
 
         quantity = 1  # TODO: Calculate based on portfolio
 
+        # Check if we should actually execute or just simulate
+        if not trading_config.execute_orders:
+            logger.info(f"[DRY RUN] Would execute: {signal.ticker} @ {entry} | TP: {target} | SL: {stop_loss}")
+            return TradeResult(
+                success=True,
+                order_id="DRY_RUN_SIMULATED",
+                simulated=True,
+            )
+
         try:
             result = self._order_tools.place_bracket_order(
                 symbol=signal.ticker,
