@@ -1,47 +1,90 @@
-import os
-from ibind import IbkrClient
+#!/usr/bin/env python3
+"""Trading Service - Main entry point.
 
-# Railway-n a belső cím általában így néz ki: servicename.railway.internal:5000
-# De ha IBEAM_ADDRESS-ben domain van (pl. ibeam-production.up.railway.app),
-# akkor HTTPS-t kell használni
+Runs a continuous BRPOP loop consuming signals from Redis queue.
+"""
 
-ibeam_address = os.getenv('IBEAM_ADDRESS', 'localhost:5000')
+import logging
+import signal
+import sys
+from pathlib import Path
 
-# Ha nem tartalmaz http-t, adjuk hozzá
-if not ibeam_address.startswith('http'):
-    # Railway domain esetén HTTPS, különben HTTP
-    if 'railway.app' in ibeam_address:
-        base_url = f'https://{ibeam_address}'
-    else:
-        base_url = f'http://{ibeam_address}'
-else:
-    base_url = ibeam_address
+sys.path.insert(0, str(Path(__file__).parent))
 
-print(f"Connecting to IBeam at: {base_url}")
+from config.settings import config
+from config.redis_config import trading_config
+from infrastructure.queue.redis_consumer import RedisConsumer
+from domain.services.trading_service import TradingService
+from utils.logging_config import setup_logging
 
-# IbkrClient létrehozása
-client = IbkrClient(base_url=base_url)
+logger = setup_logging(
+    "trading_service",
+    level=logging.DEBUG if config.DEBUG else logging.INFO
+)
 
-try:
-    # 1. Authentikációs státusz ellenőrzése
-    print("\n=== Authentication Status ===")
-    auth_status = client.tickle()
-    print(f"Auth status: {auth_status}")
+consumer: RedisConsumer = None
 
-    # 2. Portfolio accounts lekérdezése
-    print("\n=== Portfolio Accounts ===")
-    accounts = client.portfolio_accounts()
-    print(f"Accounts: {accounts}")
 
-    # 3. Account summary (ha van account)
-    if accounts:
-        account_id = accounts[0].get('accountId')
-        print(f"\n=== Account Summary for {account_id} ===")
-        summary = client.portfolio_account_summary(account_id=account_id)
-        print(f"Summary: {summary}")
+def signal_handler(signum, frame):
+    """Handle shutdown signals."""
+    logger.info("Shutdown signal received...")
+    if consumer:
+        consumer.stop()
 
-    print("\n✅ Connection successful!")
 
-except Exception as e:
-    print(f"\n❌ Error: {e}")
-    print(f"Make sure IBeam is running and accessible at {base_url}")
+def main() -> int:
+    """Main entry point."""
+    global consumer
+
+    logger.info("=" * 50)
+    logger.info("Trading Service Starting")
+    logger.info("=" * 50)
+
+    try:
+        config.validate()
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
+        return 1
+
+    logger.info(f"LiteLLM URL: {config.LITELLM_URL}")
+    logger.info(f"IBKR URL: {config.IBEAM_URL}")
+    logger.info(f"Account: {config.IB_ACCOUNT_ID}")
+    logger.info(f"Model: {trading_config.current_llm_model}")
+
+    params = trading_config.get_all()
+    logger.info(f"Emergency Stop: {'ACTIVE' if params['emergency_stop'] else 'Off'}")
+    logger.info(f"Max VIX: {params['max_vix_level']}")
+    logger.info(f"Min Confidence: {params['min_ai_confidence_score']:.0%}")
+    logger.info(f"Whitelist: {params['whitelist_tickers']}")
+
+    trading_service = TradingService()
+    consumer = RedisConsumer()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    stats = consumer.get_stats()
+    logger.info(f"Queue stats: {stats}")
+
+    logger.info("Starting consumer loop (BRPOP)...")
+    logger.info("=" * 50)
+
+    try:
+        consumer.run(
+            handler=trading_service.process_signal,
+            timeout=0,
+        )
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+        return 1
+    finally:
+        consumer.close()
+        logger.info("Trading Service stopped")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

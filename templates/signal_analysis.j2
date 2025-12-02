@@ -1,0 +1,99 @@
+{# Signal Analysis Prompt Template #}
+## Trading Signal Analysis
+
+### Signal Information
+- **Thread**: {{ signal.thread_name }}
+- **Forum**: {{ signal.forum_name }}
+- **Created**: {{ signal.created_at }}
+- **Scraped**: {{ signal.scraped_at }}
+
+### Parsed Signal Data
+- **Ticker**: {{ signal.ticker or 'N/A' }}
+- **Direction**: {{ signal.direction or 'N/A' }}
+- **Strike**: {{ '${:.2f}'.format(signal.strike) if signal.strike else 'N/A' }}
+- **Entry Price**: {{ '${:.2f}'.format(signal.entry_price) if signal.entry_price else 'N/A' }}
+- **Target Price**: {{ '${:.2f}'.format(signal.target_price) if signal.target_price else 'N/A' }}
+- **Stop Loss**: {{ '${:.2f}'.format(signal.stop_loss) if signal.stop_loss else 'N/A' }}
+- **Expiry**: {{ signal.expiry or 'N/A' }}
+- **Signal Confidence**: {{ '{:.0%}'.format(signal.confidence) if signal.confidence else 'N/A' }}
+- **Position Size**: {{ '{:.0%}'.format(signal.position_size) if signal.position_size else 'N/A' }}
+
+### Raw Signal Content
+```
+{{ signal.full_content }}
+```
+
+---
+
+### Current Market Data
+- **{{ market.symbol }} Price**: {{ '${:.2f}'.format(market.price) if market.price else 'N/A' }}
+- **Volume**: {{ '{:,}'.format(market.volume) if market.volume else 'N/A' }}
+- **Volatility (20d)**: {{ '{:.2%}'.format(market.volatility) if market.volatility else 'N/A' }}
+- **VIX**: {{ '{:.2f}'.format(market.vix) if market.vix else 'N/A' }}
+- **Data Timestamp**: {{ market.timestamp }}
+
+---
+
+### Portfolio Status
+- **Account**: {{ portfolio.account_id }}
+- **Net Liquidation**: {{ '${:,.2f}'.format(portfolio.net_liquidation) if portfolio.net_liquidation else 'N/A' }}
+- **Cash Available**: {{ '${:,.2f}'.format(portfolio.total_cash) if portfolio.total_cash else 'N/A' }}
+- **Daily P&L**: {{ '${:,.2f}'.format(portfolio.unrealized_pnl) if portfolio.unrealized_pnl else 'N/A' }}
+- **Open Positions**: {{ portfolio.position_count }}
+
+{% if portfolio.positions %}
+#### Current Positions
+{% for pos in portfolio.positions %}
+- {{ pos.symbol }}: {{ pos.quantity }} @ ${{ '{:.2f}'.format(pos.avg_cost) }} (P&L: ${{ '{:.2f}'.format(pos.unrealized_pnl) }})
+{% endfor %}
+{% endif %}
+
+---
+
+### Trading Rules & Limits
+- **Max Loss Per Trade**: {{ '{:.1%}'.format(config.max_loss_per_trade_percent) }}
+- **Max Daily Trades**: {{ config.max_daily_trades }}
+- **Max Concurrent Positions**: {{ config.max_concurrent_positions }}
+- **Max Daily Loss**: {{ '{:.1%}'.format(config.max_loss_per_day_percent) }}
+- **Default Stop Loss**: {{ '{:.1%}'.format(config.default_stop_loss_percent) }}
+- **Default Take Profit**: {{ '{:.1%}'.format(config.default_take_profit_percent) }}
+- **Min AI Confidence**: {{ '{:.0%}'.format(config.min_ai_confidence_score) }}
+- **Max VIX Level**: {{ config.max_vix_level }}
+- **Max Position Size**: {{ '{:.1%}'.format(config.max_position_size_percent) }}
+- **Emergency Stop**: {{ 'ACTIVE' if config.emergency_stop else 'Off' }}
+
+{% if config.whitelist_tickers %}
+- **Allowed Tickers**: {{ config.whitelist_tickers | join(', ') }}
+{% endif %}
+{% if config.blacklist_tickers %}
+- **Blacklisted Tickers**: {{ config.blacklist_tickers | join(', ') }}
+{% endif %}
+
+{% if config.trailing_stop_enabled %}
+- **Trailing Stop**: Enabled (Activation: {{ '{:.1%}'.format(config.trailing_stop_activation_percent) }}, Distance: {{ '{:.1%}'.format(config.trailing_stop_distance_percent) }})
+{% endif %}
+
+---
+
+## Your Task
+
+Analyze this trading signal and decide:
+
+1. **SKIP** - Do not execute this trade (explain why)
+2. **EXECUTE** - Execute the trade as specified (or with minor adjustments)
+3. **MODIFY** - Execute with modified parameters (specify changes)
+
+Consider:
+- Is the ticker allowed (whitelist) and not blacklisted?
+- Is VIX within acceptable range?
+- Is the signal confidence above minimum threshold?
+- Do we have capacity for another position?
+- Does the trade fit within risk limits?
+- Is the current price favorable compared to signal?
+- Are market conditions suitable?
+
+If you decide to execute, use the available tools to:
+1. Get current market data to verify conditions
+2. Place the appropriate order (market, limit, or bracket)
+
+Provide your reasoning and confidence level in your decision.
