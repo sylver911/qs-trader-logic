@@ -89,10 +89,16 @@ class Signal:
 
         full_content = "\n".join(m.content for m in self.messages)
 
-        # Extract ticker from thread name (e.g., "SPY 2025-11-30")
+        # Extract ticker from thread name (e.g., "SPY 2025-11-30" or "SPY,QQQ,IWM QuantSignals...")
         parts = self.thread_name.split()
         if parts:
-            self.ticker = parts[0].upper()
+            # Take first part and clean it
+            raw_ticker = parts[0].upper()
+            # Handle comma-separated tickers - take the first one
+            if "," in raw_ticker:
+                raw_ticker = raw_ticker.split(",")[0]
+            # Remove any trailing punctuation
+            self.ticker = raw_ticker.strip().rstrip(",.:;!?")
 
         # Extract direction
         content_upper = full_content.upper()
