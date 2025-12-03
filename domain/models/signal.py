@@ -1,5 +1,6 @@
 """Signal domain model."""
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -43,6 +44,16 @@ class Signal:
     confidence: Optional[float] = None
     position_size: Optional[float] = None
 
+    # Known invalid "ticker" words that appear in thread names
+    INVALID_TICKER_WORDS = {
+        'EXPLOSIVE', 'WSB', 'YOLO', 'HODL', 'MOON', 'APE',
+        'STONK', 'STONKS', 'ALERT', 'SIGNAL', 'BUY', 'SELL',
+        'CALL', 'PUT', 'OPTIONS', 'TRADING', 'STOCK', 'STOCKS',
+        'UPDATE', 'NEWS', 'BREAKING', 'URGENT', 'HOT', 'NEW',
+        'QUANTSIGNALS', 'KATY', 'PREDICTION', 'ANALYSIS',
+        'AI', 'BOT', 'FREE', 'PREMIUM', 'VIP', 'DAILY', 'WEEKLY',
+    }
+
     @classmethod
     def from_mongo_doc(cls, doc: Dict[str, Any]) -> "Signal":
         """Create Signal from MongoDB document.
@@ -82,6 +93,104 @@ class Signal:
 
         return signal
 
+    def _is_valid_ticker(self, ticker: str) -> bool:
+        """Check if a string looks like a valid stock ticker.
+
+        Args:
+            ticker: Potential ticker string
+
+        Returns:
+            True if it looks like a valid ticker
+        """
+        if not ticker:
+            return False
+
+        # Clean the ticker
+        ticker = ticker.strip().upper()
+
+        # Must be alphabetic (no numbers, special chars)
+        if not ticker.isalpha():
+            return False
+
+        # Must be 1-5 characters (standard US tickers)
+        # Allow up to 6 for some special cases like GOOGL
+        if len(ticker) < 1 or len(ticker) > 6:
+            return False
+
+        # Check against blacklist of common non-ticker words
+        if ticker in self.INVALID_TICKER_WORDS:
+            return False
+
+        return True
+
+    def _extract_ticker_from_thread_name(self) -> Optional[str]:
+        """Extract valid ticker from thread name.
+
+        Handles formats like:
+        - "SPY 2025-11-30"
+        - "SPY,QQQ,IWM QuantSignals..."
+        - "NVDA Analysis..."
+        - "$SPY Alert"
+
+        Returns:
+            Valid ticker or None
+        """
+        if not self.thread_name:
+            return None
+
+        # Split by whitespace
+        parts = self.thread_name.split()
+
+        for part in parts:
+            # Clean the part
+            raw = part.upper().strip()
+
+            # Remove leading $ if present
+            if raw.startswith('$'):
+                raw = raw[1:]
+
+            # Handle comma-separated tickers - take the first one
+            if ',' in raw:
+                candidates = raw.split(',')
+                for candidate in candidates:
+                    candidate = candidate.strip().rstrip(",.:;!?")
+                    if self._is_valid_ticker(candidate):
+                        return candidate
+            else:
+                # Remove trailing punctuation
+                raw = raw.rstrip(",.:;!?")
+                if self._is_valid_ticker(raw):
+                    return raw
+
+        return None
+
+    def _extract_ticker_from_content(self) -> Optional[str]:
+        """Try to extract ticker from message content.
+
+        Returns:
+            Valid ticker or None
+        """
+        if not self.messages:
+            return None
+
+        full_content = "\n".join(m.content for m in self.messages)
+
+        # Look for common patterns like "Ticker: SPY" or "Symbol: NVDA"
+        patterns = [
+            r'(?:ticker|symbol)\s*[:\-=]\s*\$?([A-Z]{1,6})\b',
+            r'\$([A-Z]{1,6})\b',  # $SPY format
+            r'(?:analyzing|analysis of)\s+\$?([A-Z]{1,6})\b',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, full_content, re.IGNORECASE)
+            if match:
+                candidate = match.group(1).upper()
+                if self._is_valid_ticker(candidate):
+                    return candidate
+
+        return None
+
     def _parse_signal_content(self) -> None:
         """Parse signal content from messages."""
         if not self.messages:
@@ -89,16 +198,10 @@ class Signal:
 
         full_content = "\n".join(m.content for m in self.messages)
 
-        # Extract ticker from thread name (e.g., "SPY 2025-11-30" or "SPY,QQQ,IWM QuantSignals...")
-        parts = self.thread_name.split()
-        if parts:
-            # Take first part and clean it
-            raw_ticker = parts[0].upper()
-            # Handle comma-separated tickers - take the first one
-            if "," in raw_ticker:
-                raw_ticker = raw_ticker.split(",")[0]
-            # Remove any trailing punctuation
-            self.ticker = raw_ticker.strip().rstrip(",.:;!?")
+        # Extract ticker - try thread name first, then content
+        self.ticker = self._extract_ticker_from_thread_name()
+        if not self.ticker:
+            self.ticker = self._extract_ticker_from_content()
 
         # Extract direction
         content_upper = full_content.upper()
@@ -106,38 +209,39 @@ class Signal:
             self.direction = "CALL"
         elif "BUY PUTS" in content_upper or "DIRECTION: PUT" in content_upper:
             self.direction = "PUT"
-        elif "SELL" in content_upper:
+        elif "SHORT" in content_upper and "SELL" in content_upper:
             self.direction = "SELL"
+        elif "LONG" in content_upper or "BUY" in content_upper:
+            self.direction = "BUY"
 
         # Extract numeric values using simple parsing
         self._extract_numeric_values(full_content)
 
     def _extract_numeric_values(self, content: str) -> None:
         """Extract numeric values from content."""
-        import re
-
         # Confidence (e.g., "Confidence: 65%")
-        confidence_match = re.search(r"Confidence:\s*(\d+)%", content, re.IGNORECASE)
+        confidence_match = re.search(r"Confidence:\s*(\d+(?:\.\d+)?)%?", content, re.IGNORECASE)
         if confidence_match:
-            self.confidence = float(confidence_match.group(1)) / 100
+            val = float(confidence_match.group(1))
+            self.confidence = val / 100 if val > 1 else val
 
         # Strike (e.g., "Strike: $683.00" or "Strike Focus: $683.00")
         strike_match = re.search(r"Strike(?:\s*Focus)?:\s*\$?([\d.]+)", content, re.IGNORECASE)
         if strike_match:
             self.strike = float(strike_match.group(1))
 
-        # Entry Price (e.g., "Entry Price: $1.77" or "Entry Range: $1.77")
+        # Entry Price (e.g., "Entry Price: $1.77" or "Entry Range: $1.77" or "Entry: $182.30")
         entry_match = re.search(r"Entry(?:\s*(?:Price|Range))?:\s*\$?([\d.]+)", content, re.IGNORECASE)
         if entry_match:
             self.entry_price = float(entry_match.group(1))
 
-        # Target (e.g., "Target 1: $2.10" or "Profit Target: $2.10")
-        target_match = re.search(r"(?:Target\s*1|Profit\s*Target):\s*\$?([\d.]+)", content, re.IGNORECASE)
+        # Target (e.g., "Target 1: $2.10" or "Profit Target: $2.10" or "Target: $180.92")
+        target_match = re.search(r"(?:Target\s*(?:1)?|Profit\s*Target):\s*\$?([\d.]+)", content, re.IGNORECASE)
         if target_match:
             self.target_price = float(target_match.group(1))
 
-        # Stop Loss (e.g., "Stop Loss: $1.40")
-        stop_match = re.search(r"Stop\s*Loss:\s*\$?([\d.]+)", content, re.IGNORECASE)
+        # Stop Loss (e.g., "Stop Loss: $1.40" or "Stop: $185.03")
+        stop_match = re.search(r"Stop(?:\s*Loss)?:\s*\$?([\d.]+)", content, re.IGNORECASE)
         if stop_match:
             self.stop_loss = float(stop_match.group(1))
 

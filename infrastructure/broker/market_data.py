@@ -4,11 +4,34 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+import pandas as pd
 import yfinance as yf
 
 from infrastructure.broker.ibkr_client import IBKRBroker
 
 logger = logging.getLogger(__name__)
+
+
+def convert_timestamps(obj: Any) -> Any:
+    """Recursively convert pandas Timestamps to ISO strings.
+
+    Args:
+        obj: Object to convert
+
+    Returns:
+        Object with timestamps converted to strings
+    """
+    if isinstance(obj, pd.Timestamp):
+        return obj.isoformat()
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: convert_timestamps(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_timestamps(item) for item in obj]
+    elif hasattr(obj, 'item'):  # numpy types
+        return obj.item()
+    return obj
 
 
 class MarketDataProvider:
@@ -207,14 +230,73 @@ class MarketDataProvider:
             # Get option chain
             chain = ticker.option_chain(target_expiry)
 
+            # Convert DataFrames to dicts WITH TIMESTAMP CONVERSION
+            calls_data = []
+            puts_data = []
+
+            if not chain.calls.empty:
+                calls_data = chain.calls.to_dict(orient="records")
+                calls_data = convert_timestamps(calls_data)
+
+            if not chain.puts.empty:
+                puts_data = chain.puts.to_dict(orient="records")
+                puts_data = convert_timestamps(puts_data)
+
             return {
                 "symbol": symbol,
                 "expiry": target_expiry,
                 "available_expiries": list(expirations),
-                "calls": chain.calls.to_dict(orient="records") if not chain.calls.empty else [],
-                "puts": chain.puts.to_dict(orient="records") if not chain.puts.empty else [],
+                "calls": calls_data,
+                "puts": puts_data,
             }
 
         except Exception as e:
             logger.error(f"Failed to get option chain for {symbol}: {e}")
+            return {"error": str(e)}
+
+    def get_historical_data(
+        self,
+        symbol: str,
+        period: str = "1mo",
+        interval: str = "1d",
+    ) -> Dict[str, Any]:
+        """Get historical price data.
+
+        Args:
+            symbol: Ticker symbol
+            period: Time period (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
+            interval: Data interval (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
+
+        Returns:
+            Historical data dictionary
+        """
+        try:
+            ticker = yf.Ticker(symbol)
+            data = ticker.history(period=period, interval=interval)
+
+            if data.empty:
+                return {"error": f"No historical data for {symbol}"}
+
+            # Convert to list of records WITH TIMESTAMP CONVERSION
+            records = []
+            for idx, row in data.iterrows():
+                record = {
+                    "date": idx.isoformat() if hasattr(idx, 'isoformat') else str(idx),
+                    "open": float(row["Open"]),
+                    "high": float(row["High"]),
+                    "low": float(row["Low"]),
+                    "close": float(row["Close"]),
+                    "volume": int(row["Volume"]),
+                }
+                records.append(record)
+
+            return {
+                "symbol": symbol,
+                "period": period,
+                "interval": interval,
+                "data": records,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to get historical data for {symbol}: {e}")
             return {"error": str(e)}

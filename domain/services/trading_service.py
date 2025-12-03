@@ -5,6 +5,8 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
+
 from config.settings import config
 from config.redis_config import trading_config
 from domain.models.signal import Signal
@@ -18,6 +20,23 @@ from tools.portfolio_tools import PortfolioTools
 from tools.order_tools import OrderTools
 
 logger = logging.getLogger(__name__)
+
+
+def json_serializer(obj: Any) -> Any:
+    """Custom JSON serializer for non-standard types.
+
+    Handles:
+    - pandas Timestamp -> ISO string
+    - datetime -> ISO string
+    - numpy types -> Python native types
+    """
+    if isinstance(obj, pd.Timestamp):
+        return obj.isoformat()
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if hasattr(obj, 'item'):  # numpy types
+        return obj.item()
+    raise TypeError(f'Object of type {type(obj).__name__} is not JSON serializable')
 
 
 class TradingService:
@@ -73,7 +92,7 @@ class TradingService:
                 logger.debug("Dry run mode - using empty portfolio")
                 portfolio_data = {"positions": [], "cash": 100000, "pnl": 0}
 
-            # 5. Analyze with AI (iterative tool calling)
+            # 5. Analyze with AI
             ai_response = self._analyze_with_ai(signal, market_data, portfolio_data)
 
             # 6. Execute if needed
@@ -113,6 +132,10 @@ class TradingService:
         if not ticker:
             return "No ticker found in signal"
 
+        # Validate ticker format (basic sanity check)
+        if not self._is_valid_ticker(ticker):
+            return f"Invalid ticker format: {ticker}"
+
         whitelist = trading_config.whitelist_tickers
         if whitelist and ticker not in whitelist:
             return f"Ticker {ticker} not in whitelist"
@@ -139,6 +162,39 @@ class TradingService:
 
         return None
 
+    def _is_valid_ticker(self, ticker: str) -> bool:
+        """Validate ticker format.
+
+        Args:
+            ticker: Ticker symbol to validate
+
+        Returns:
+            True if ticker appears valid
+        """
+        if not ticker:
+            return False
+
+        # Must be 1-5 uppercase letters (standard US tickers)
+        # Or 1-6 for some ETFs like GOOGL, NVDA
+        if not ticker.isalpha():
+            return False
+
+        if len(ticker) > 6:
+            return False
+
+        # Blacklist obvious non-ticker words
+        invalid_tickers = {
+            'EXPLOSIVE', 'WSB', 'YOLO', 'HODL', 'MOON', 'APE',
+            'STONK', 'STONKS', 'ALERT', 'SIGNAL', 'BUY', 'SELL',
+            'CALL', 'PUT', 'OPTIONS', 'TRADING', 'STOCK', 'STOCKS',
+            'UPDATE', 'NEWS', 'BREAKING', 'URGENT', 'HOT', 'NEW',
+        }
+
+        if ticker.upper() in invalid_tickers:
+            return False
+
+        return True
+
     def _get_market_data(self, ticker: str) -> Dict[str, Any]:
         """Get market data for a ticker."""
         if not ticker:
@@ -151,7 +207,7 @@ class TradingService:
         market_data: Dict[str, Any],
         portfolio_data: Dict[str, Any],
     ) -> AIResponse:
-        """Analyze signal with AI using iterative tool calling."""
+        """Analyze signal with AI with iterative tool calling."""
         tools = (
             MarketTools.get_tool_definitions()
             + PortfolioTools.get_tool_definitions()
@@ -166,7 +222,7 @@ class TradingService:
 
         trading_params = trading_config.get_all()
 
-        # Initial LLM call
+        # Initial call
         response = self._llm.analyze_signal(
             signal_data=signal.to_dict(),
             market_data=market_data,
@@ -175,19 +231,19 @@ class TradingService:
             tools=tools,
         )
 
-        # Build message history for multi-turn conversation
+        # Build message history for multi-turn
         messages = [
             {"role": "system", "content": self._llm._get_system_prompt()},
             {"role": "user", "content": response.get("_prompt", "")},
         ]
 
-        # Iterative tool calling loop (max 10 iterations)
+        # Iterative tool calling loop (max 10 iterations to prevent infinite loops)
         max_iterations = 10
         iteration = 0
 
         while response.get("tool_calls") and iteration < max_iterations:
             iteration += 1
-            logger.info(f"Tool call iteration {iteration}, {len(response['tool_calls'])} tools")
+            logger.info(f"Tool call iteration {iteration}")
 
             # Execute tool calls
             tool_results = self._llm.execute_tool_calls(
@@ -197,23 +253,15 @@ class TradingService:
 
             for result in tool_results:
                 if result["success"]:
-                    logger.info(f"Tool executed: {result['function']}")
+                    logger.info(f"Tool executed: {result['function']} -> {str(result.get('result', ''))[:100]}")
                 else:
                     logger.warning(f"Tool failed: {result['function']} - {result.get('error')}")
 
-            # Add assistant message with tool calls to history
-            assistant_msg = {
+            # Add assistant message with tool calls
+            messages.append({
                 "role": "assistant",
-                "content": response.get("content") or "",
-            }
-
-            # IMPORTANT: DeepSeek Reasoner requires reasoning_content in assistant message
-            if response.get("reasoning_content"):
-                assistant_msg["reasoning_content"] = response["reasoning_content"]
-
-            # Add tool_calls to assistant message
-            if response.get("tool_calls"):
-                assistant_msg["tool_calls"] = [
+                "content": response.get("content", ""),
+                "tool_calls": [
                     {
                         "id": tc["id"],
                         "type": "function",
@@ -223,31 +271,36 @@ class TradingService:
                         }
                     }
                     for tc in response["tool_calls"]
-                ]
+                ],
+            })
 
-            messages.append(assistant_msg)
-
-            # Add tool results to history
+            # Add tool results - USE CUSTOM SERIALIZER for Timestamp handling
             for result in tool_results:
+                try:
+                    result_content = result.get("result") if result["success"] else {"error": result.get("error")}
+                    # Use custom serializer to handle pandas Timestamp
+                    serialized_content = json.dumps(result_content, default=json_serializer)
+                except TypeError as e:
+                    logger.warning(f"Serialization error for {result.get('function')}: {e}")
+                    serialized_content = json.dumps({"error": f"Serialization error: {str(e)}"})
+
                 messages.append({
                     "role": "tool",
                     "tool_call_id": result["call_id"],
-                    "content": json.dumps(
-                        result.get("result") if result["success"]
-                        else {"error": result.get("error")}
-                    ),
+                    "content": serialized_content,
                 })
 
-            # Continue conversation with tool results
+            # Continue with tool results
             response = self._llm.continue_with_tool_results(
-                messages=messages,
+                original_messages=messages,
+                tool_results=tool_results,
                 tools=tools,
             )
 
         if iteration >= max_iterations:
             logger.warning(f"Max tool call iterations ({max_iterations}) reached")
 
-        # Parse final decision from response
+        # Parse final decision
         decision = self._parse_decision(response.get("content", ""))
 
         return AIResponse(
@@ -269,14 +322,17 @@ class TradingService:
                 action_str = data.get("action", "skip").lower()
                 action = TradeAction(action_str) if action_str in ["skip", "execute", "modify"] else TradeAction.SKIP
 
+                # FIX: Handle None modified_params safely
+                modified_params = data.get("modified_params") or {}
+
                 return TradeDecision(
                     action=action,
                     reasoning=data.get("reasoning", ""),
                     confidence=float(data.get("confidence", 0)),
-                    modified_entry=data.get("modified_params", {}).get("entry_price"),
-                    modified_target=data.get("modified_params", {}).get("target_price"),
-                    modified_stop_loss=data.get("modified_params", {}).get("stop_loss"),
-                    modified_size=data.get("modified_params", {}).get("size"),
+                    modified_entry=modified_params.get("entry_price"),
+                    modified_target=modified_params.get("target_price"),
+                    modified_stop_loss=modified_params.get("stop_loss"),
+                    modified_size=modified_params.get("size"),
                     skip_reason=data.get("reasoning") if action == TradeAction.SKIP else None,
                 )
         except (json.JSONDecodeError, ValueError) as e:

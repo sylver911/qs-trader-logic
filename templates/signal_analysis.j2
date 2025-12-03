@@ -1,19 +1,20 @@
-{# DeepSeek Reasoner - Signal only, tools available #}
-
+{# DeepSeek Reasoner - Optimized #}
 ## SIGNAL
+**{{ signal.ticker }}** {{ signal.direction }}{% if signal.strike %} {{ signal.expiry }} ${{ '{:.0f}'.format(signal.strike) }}{% endif %}
+Entry: ${{ '{:.2f}'.format(signal.entry_price) if signal.entry_price else 'MARKET' }}{% if signal.target_price %} | Target: ${{ '{:.2f}'.format(signal.target_price) }}{% endif %}{% if signal.stop_loss %} | Stop: ${{ '{:.2f}'.format(signal.stop_loss) }}{% endif %}
 
-**{{ signal.ticker }}** {{ signal.direction }}
-{% if signal.strike %}{{ signal.expiry }} ${{ '{:.0f}'.format(signal.strike) }} {{ signal.direction }}{% endif %}
-
-Entry: ${{ '{:.2f}'.format(signal.entry_price) if signal.entry_price else 'MARKET' }}
-{% if signal.target_price %}Target: ${{ '{:.2f}'.format(signal.target_price) }}{% endif %}
-{% if signal.stop_loss %}Stop: ${{ '{:.2f}'.format(signal.stop_loss) }}{% endif %}
-
-{% if signal.full_content %}
-Raw:
-{{ signal.full_content }}
-{% endif %}
+{% if signal.full_content %}Raw: {{ signal.full_content }}{% endif %}
 
 ---
+## NOW
+**{{ current_time }}** EST | Market: **{{ 'OPEN' if market_open else 'CLOSED' }}**
+{% if signal.expiry == today_date and not market_open %}⚠️ 0DTE + Market closed = SKIP{% endif %}
 
-Analyze this signal. Use tools to verify. Decide: execute or skip.
+---
+## MINDSET
+Trust the signal. Small position, tight stop, let winners run.
+Skip ONLY for: closed market, 0DTE expired, or broken setup (price way past entry).
+When in doubt → execute small.
+
+---
+Decide: execute or skip.
