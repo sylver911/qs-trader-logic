@@ -35,6 +35,7 @@ class Signal:
 
     # Parsed signal data
     ticker: Optional[str] = None
+    tickers_raw: Optional[str] = None  # Original ticker string if multiple/unparseable
     direction: Optional[str] = None  # BUY/SELL, CALL/PUT
     strike: Optional[float] = None
     entry_price: Optional[float] = None
@@ -191,6 +192,53 @@ class Signal:
 
         return None
 
+    def _get_raw_ticker_string(self) -> Optional[str]:
+        """Get raw ticker string from thread name for LLM fallback.
+
+        Returns:
+            Raw ticker portion of thread name
+        """
+        if not self.thread_name:
+            return None
+
+        # Get the first "word" which might contain tickers
+        parts = self.thread_name.split()
+        if parts:
+            raw = parts[0].strip()
+            # If it looks like it could contain ticker info
+            if any(c.isalpha() for c in raw):
+                return raw
+
+        return None
+
+    def _extract_first_plausible_ticker(self, raw: str) -> Optional[str]:
+        """Try to extract first plausible ticker from raw string.
+
+        Args:
+            raw: Raw ticker string (e.g., "SPY,QQQ,NVDA")
+
+        Returns:
+            First valid ticker or None
+        """
+        # Split by common separators
+        for sep in [',', '/', '|', ' ', '-']:
+            if sep in raw:
+                parts = raw.split(sep)
+                for part in parts:
+                    cleaned = part.strip().upper().lstrip('$')
+                    # Remove trailing punctuation
+                    cleaned = re.sub(r'[^A-Z]$', '', cleaned)
+                    if cleaned and self._is_valid_ticker(cleaned):
+                        return cleaned
+
+        # No separator, try cleaning the whole thing
+        cleaned = raw.strip().upper().lstrip('$')
+        cleaned = re.sub(r'[^A-Z]', '', cleaned)
+        if cleaned and len(cleaned) <= 6 and self._is_valid_ticker(cleaned):
+            return cleaned
+
+        return None
+
     def _parse_signal_content(self) -> None:
         """Parse signal content from messages."""
         if not self.messages:
@@ -198,10 +246,21 @@ class Signal:
 
         full_content = "\n".join(m.content for m in self.messages)
 
-        # Extract ticker - try thread name first, then content
+        # Extract ticker - try multiple strategies
+        # Strategy 1: Try to get a clean single ticker from thread name
         self.ticker = self._extract_ticker_from_thread_name()
+
+        # Strategy 2: If no clean ticker, try from content
         if not self.ticker:
             self.ticker = self._extract_ticker_from_content()
+
+        # Strategy 3: If still nothing clean, save raw for LLM to figure out
+        if not self.ticker:
+            raw = self._get_raw_ticker_string()
+            if raw:
+                self.tickers_raw = raw
+                # Try to get at least the first plausible ticker
+                self.ticker = self._extract_first_plausible_ticker(raw)
 
         # Extract direction
         content_upper = full_content.upper()
@@ -275,6 +334,7 @@ class Signal:
             ],
             "full_content": self.get_full_content(),
             "ticker": self.ticker,
+            "tickers_raw": self.tickers_raw,  # Original if multiple/unparseable
             "direction": self.direction,
             "strike": self.strike,
             "entry_price": self.entry_price,
