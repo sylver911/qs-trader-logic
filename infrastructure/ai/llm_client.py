@@ -1,4 +1,4 @@
-"""LiteLLM client for AI signal analysis."""
+"""LiteLLM client for AI signal analysis - FIXED VERSION."""
 
 import json
 import logging
@@ -41,125 +41,13 @@ class LLMClient:
         template_name: str,
         context: Dict[str, Any],
     ) -> str:
-        """Render a Jinja2 template.
-
-        Args:
-            template_name: Template file name
-            context: Template context variables
-
-        Returns:
-            Rendered prompt string
-        """
+        """Render a Jinja2 template."""
         try:
             template = self._env.get_template(template_name)
             return template.render(**context)
         except Exception as e:
             logger.error(f"Template render error: {e}")
             raise
-
-    def analyze_signal(
-        self,
-        signal_data: Dict[str, Any],
-        market_data: Dict[str, Any],
-        portfolio_data: Dict[str, Any],
-        trading_params: Dict[str, Any],
-        tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """Analyze a trading signal with AI.
-
-        Args:
-            signal_data: Signal information
-            market_data: Current market data
-            portfolio_data: Portfolio state
-            trading_params: Trading configuration
-            tools: Available tools for function calling
-
-        Returns:
-            AI response with decision
-        """
-        model = trading_config.current_llm_model
-
-        # Render prompt
-        context = {
-            "signal": signal_data,
-            "market": market_data,
-            "portfolio": portfolio_data,
-            "config": trading_params,
-        }
-
-        prompt = self.render_prompt("signal_analysis.j2", context)
-
-        logger.debug(f"Sending prompt to {model}")
-        logger.debug(f"Prompt length: {len(prompt)} chars")
-
-        try:
-            # Call LiteLLM
-            response = completion(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": self._get_system_prompt(),
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    },
-                ],
-                api_base=self._api_base,
-                api_key=self._api_key or "dummy",  # Proxy handles auth
-                tools=tools,
-                tool_choice="auto" if tools else None,
-                temperature=0.3,
-                max_tokens=2000,
-            )
-
-            # Extract response
-            message = response.choices[0].message
-            content = message.content or ""
-
-            # Check for tool calls
-            tool_calls = []
-            if hasattr(message, "tool_calls") and message.tool_calls:
-                tool_calls = [
-                    {
-                        "id": tc.id,
-                        "function": tc.function.name,
-                        "arguments": json.loads(tc.function.arguments),
-                    }
-                    for tc in message.tool_calls
-                ]
-
-            # Extract reasoning_content for DeepSeek Reasoner
-            reasoning_content = getattr(message, "reasoning_content", None)
-            if not reasoning_content and hasattr(message, "provider_specific_fields"):
-                reasoning_content = message.provider_specific_fields.get("reasoning_content")
-
-            result = {
-                "content": content,
-                "tool_calls": tool_calls,
-                "reasoning_content": reasoning_content,  # Required for DeepSeek Reasoner
-                "model": model,
-                "_prompt": prompt,  # Store for message history
-                "usage": {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                },
-            }
-
-            logger.info(f"AI response received, {result['usage']['total_tokens']} tokens")
-
-            return result
-
-        except Exception as e:
-            logger.error(f"LLM call failed: {e}")
-            return {
-                "content": "",
-                "tool_calls": [],
-                "error": str(e),
-                "model": model,
-            }
 
     def _get_system_prompt(self) -> str:
         """Get the system prompt."""
@@ -218,20 +106,93 @@ IMPORTANT: After using tools and gathering information, you MUST provide your fi
     }
 }"""
 
+    def analyze_signal(
+        self,
+        signal_data: Dict[str, Any],
+        market_data: Dict[str, Any],
+        portfolio_data: Dict[str, Any],
+        trading_params: Dict[str, Any],
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Analyze a trading signal with AI."""
+        model = trading_config.current_llm_model
+
+        context = {
+            "signal": signal_data,
+            "market": market_data,
+            "portfolio": portfolio_data,
+            "config": trading_params,
+        }
+
+        prompt = self.render_prompt("signal_analysis.j2", context)
+
+        logger.debug(f"Sending prompt to {model}")
+        logger.debug(f"Prompt length: {len(prompt)} chars")
+
+        try:
+            response = completion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": self._get_system_prompt()},
+                    {"role": "user", "content": prompt},
+                ],
+                api_base=self._api_base,
+                api_key=self._api_key or "dummy",
+                tools=tools,
+                tool_choice="auto" if tools else None,
+                temperature=0.3,
+                max_tokens=2000,
+            )
+
+            message = response.choices[0].message
+            content = message.content or ""
+
+            tool_calls = []
+            if hasattr(message, "tool_calls") and message.tool_calls:
+                tool_calls = [
+                    {
+                        "id": tc.id,
+                        "function": tc.function.name,
+                        "arguments": json.loads(tc.function.arguments),
+                    }
+                    for tc in message.tool_calls
+                ]
+
+            reasoning_content = getattr(message, "reasoning_content", None)
+            if not reasoning_content and hasattr(message, "provider_specific_fields"):
+                reasoning_content = message.provider_specific_fields.get("reasoning_content")
+
+            result = {
+                "content": content,
+                "tool_calls": tool_calls,
+                "reasoning_content": reasoning_content,
+                "model": model,
+                "_prompt": prompt,
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                },
+            }
+
+            logger.info(f"AI response received, {result['usage']['total_tokens']} tokens")
+            return result
+
+        except Exception as e:
+            logger.error(f"LLM call failed: {e}")
+            return {
+                "content": "",
+                "tool_calls": [],
+                "error": str(e),
+                "model": model,
+            }
+
     def execute_tool_calls(
         self,
         tool_calls: List[Dict[str, Any]],
         tool_handlers: Dict[str, callable],
     ) -> List[Dict[str, Any]]:
-        """Execute tool calls and return results.
-
-        Args:
-            tool_calls: List of tool calls from AI
-            tool_handlers: Map of function names to handlers
-
-        Returns:
-            List of tool results
-        """
+        """Execute tool calls and return results."""
         results = []
 
         for call in tool_calls:
@@ -276,8 +237,11 @@ IMPORTANT: After using tools and gathering information, you MUST provide your fi
     ) -> Dict[str, Any]:
         """Continue conversation after tool execution.
 
+        IMPORTANT: The messages list should already contain the tool results
+        appended as role="tool" messages before calling this method.
+
         Args:
-            messages: Full message history including tool results
+            messages: Full message history INCLUDING tool results already appended
             tools: Available tools for further calls
             model: Model to use
 
@@ -285,6 +249,17 @@ IMPORTANT: After using tools and gathering information, you MUST provide your fi
             AI response (may contain more tool_calls)
         """
         model = model or trading_config.current_llm_model
+
+        # Debug log to verify messages structure
+        logger.debug(f"continue_with_tool_results called with {len(messages)} messages")
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "unknown")
+            if role == "tool":
+                logger.debug(f"  Message {i}: role=tool, call_id={msg.get('tool_call_id', 'N/A')}")
+            elif role == "assistant" and msg.get("tool_calls"):
+                logger.debug(f"  Message {i}: role=assistant with {len(msg.get('tool_calls', []))} tool_calls")
+            else:
+                logger.debug(f"  Message {i}: role={role}")
 
         try:
             response = completion(
@@ -301,7 +276,6 @@ IMPORTANT: After using tools and gathering information, you MUST provide your fi
             message = response.choices[0].message
             content = message.content or ""
 
-            # Check for more tool calls
             tool_calls = []
             if hasattr(message, "tool_calls") and message.tool_calls:
                 tool_calls = [
@@ -313,18 +287,19 @@ IMPORTANT: After using tools and gathering information, you MUST provide your fi
                     for tc in message.tool_calls
                 ]
 
-            # Extract reasoning_content for DeepSeek Reasoner
             reasoning_content = getattr(message, "reasoning_content", None)
             if not reasoning_content and hasattr(message, "provider_specific_fields"):
                 reasoning_content = message.provider_specific_fields.get("reasoning_content")
 
+            logger.debug(f"continue_with_tool_results response: content_len={len(content)}, tool_calls={len(tool_calls)}")
+
             return {
                 "content": content,
                 "tool_calls": tool_calls,
-                "reasoning_content": reasoning_content,  # Required for DeepSeek Reasoner
+                "reasoning_content": reasoning_content,
                 "model": model,
             }
 
         except Exception as e:
-            logger.error(f"Continue call failed: {e}")
+            logger.error(f"Continue call failed: {e}", exc_info=True)
             return {"content": "", "tool_calls": [], "error": str(e)}

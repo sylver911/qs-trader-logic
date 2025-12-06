@@ -1,4 +1,4 @@
-"""Trading service - main business logic."""
+"""Trading service - main business logic - FIXED VERSION."""
 
 import json
 import logging
@@ -23,18 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 def json_serializer(obj: Any) -> Any:
-    """Custom JSON serializer for non-standard types.
-
-    Handles:
-    - pandas Timestamp -> ISO string
-    - datetime -> ISO string
-    - numpy types -> Python native types
-    """
+    """Custom JSON serializer for non-standard types."""
     if isinstance(obj, pd.Timestamp):
         return obj.isoformat()
     if isinstance(obj, datetime):
         return obj.isoformat()
-    if hasattr(obj, 'item'):  # numpy types
+    if hasattr(obj, 'item'):
         return obj.item()
     raise TypeError(f'Object of type {type(obj).__name__} is not JSON serializable')
 
@@ -48,43 +42,31 @@ class TradingService:
         self._market_data = MarketDataProvider(self._broker)
         self._llm = LLMClient()
 
-        # Tools
         self._market_tools = MarketTools(self._market_data)
         self._portfolio_tools = PortfolioTools(self._broker)
         self._order_tools = OrderTools(self._broker)
 
     def process_signal(self, task: Dict[str, Any]) -> bool:
-        """Process a signal from the queue.
-
-        Args:
-            task: Task data from Redis queue
-
-        Returns:
-            True if processed successfully
-        """
+        """Process a signal from the queue."""
         thread_id = task.get("thread_id", "")
         thread_name = task.get("thread_name", "")
 
         logger.info(f"Processing signal: {thread_name} ({thread_id})")
 
         try:
-            # 1. Load signal from MongoDB
             signal = self._load_signal(thread_id)
             if not signal:
                 logger.error(f"Signal not found: {thread_id}")
                 return False
 
-            # 2. Validate pre-conditions
             validation_error = self._validate_preconditions(signal)
             if validation_error:
                 logger.warning(f"Validation failed: {validation_error}")
                 self._save_skip_result(signal, validation_error)
                 return True
 
-            # 3. Get market data
             market_data = self._get_market_data(signal.ticker)
 
-            # 4. Get portfolio state (skip in dry run)
             if trading_config.execute_orders:
                 portfolio = self._portfolio_tools.get_portfolio_summary()
                 portfolio_data = portfolio.to_dict() if portfolio else {}
@@ -92,15 +74,12 @@ class TradingService:
                 logger.debug("Dry run mode - using empty portfolio")
                 portfolio_data = {"positions": [], "cash": 100000, "pnl": 0}
 
-            # 5. Analyze with AI
             ai_response = self._analyze_with_ai(signal, market_data, portfolio_data)
 
-            # 6. Execute if needed
             if ai_response.decision.action == TradeAction.EXECUTE:
                 trade_result = self._execute_trade(signal, ai_response)
                 ai_response.trade_result = trade_result
 
-            # 7. Save result to MongoDB
             self._save_result(signal, ai_response)
 
             logger.info(
@@ -130,22 +109,17 @@ class TradingService:
 
         ticker = signal.ticker
 
-        # If no parsed ticker but we have raw ticker info, let LLM handle it
         if not ticker and signal.tickers_raw:
             logger.info(f"No clean ticker parsed, but have raw: {signal.tickers_raw} - letting LLM decide")
-            # Don't fail validation - LLM will figure it out from raw or content
             ticker = signal.tickers_raw.split(',')[0].strip() if signal.tickers_raw else None
 
         if not ticker:
-            # Check if there's enough info in the signal content for LLM
             if signal.get_full_content() and len(signal.get_full_content()) > 50:
                 logger.info("No ticker found but signal has content - letting LLM analyze")
-                return None  # Let LLM try to figure it out
+                return None
             return "No ticker found in signal and insufficient content"
 
-        # Validate ticker format (basic sanity check) - but be lenient
         if ticker and not self._is_valid_ticker(ticker):
-            # Log but don't fail - maybe LLM can work with the raw content
             logger.warning(f"Ticker '{ticker}' may be invalid, but proceeding for LLM analysis")
 
         whitelist = trading_config.whitelist_tickers
@@ -159,7 +133,6 @@ class TradingService:
         if signal.confidence and signal.confidence < trading_config.min_ai_confidence_score:
             return f"Signal confidence {signal.confidence:.0%} below minimum"
 
-        # Skip IBKR checks in dry run mode
         if not trading_config.execute_orders:
             logger.debug("Dry run mode - skipping IBKR validation")
             return None
@@ -175,26 +148,16 @@ class TradingService:
         return None
 
     def _is_valid_ticker(self, ticker: str) -> bool:
-        """Validate ticker format.
-
-        Args:
-            ticker: Ticker symbol to validate
-
-        Returns:
-            True if ticker appears valid
-        """
+        """Validate ticker format."""
         if not ticker:
             return False
 
-        # Must be 1-5 uppercase letters (standard US tickers)
-        # Or 1-6 for some ETFs like GOOGL, NVDA
         if not ticker.isalpha():
             return False
 
         if len(ticker) > 6:
             return False
 
-        # Blacklist obvious non-ticker words
         invalid_tickers = {
             'EXPLOSIVE', 'WSB', 'YOLO', 'HODL', 'MOON', 'APE',
             'STONK', 'STONKS', 'ALERT', 'SIGNAL', 'BUY', 'SELL',
@@ -249,7 +212,7 @@ class TradingService:
             {"role": "user", "content": response.get("_prompt", "")},
         ]
 
-        # Iterative tool calling loop (max 10 iterations to prevent infinite loops)
+        # Iterative tool calling loop
         max_iterations = 10
         iteration = 0
 
@@ -290,7 +253,6 @@ class TradingService:
             for result in tool_results:
                 try:
                     result_content = result.get("result") if result["success"] else {"error": result.get("error")}
-                    # Use custom serializer to handle pandas Timestamp
                     serialized_content = json.dumps(result_content, default=json_serializer)
                 except TypeError as e:
                     logger.warning(f"Serialization error for {result.get('function')}: {e}")
@@ -302,10 +264,10 @@ class TradingService:
                     "content": serialized_content,
                 })
 
-            # Continue with tool results
+            # FIXED: Use correct parameter name "messages" instead of "original_messages"
+            # and don't pass "tool_results" which doesn't exist as a parameter
             response = self._llm.continue_with_tool_results(
-                original_messages=messages,
-                tool_results=tool_results,
+                messages=messages,  # FIXED: was "original_messages"
                 tools=tools,
             )
 
@@ -334,7 +296,6 @@ class TradingService:
                 action_str = data.get("action", "skip").lower()
                 action = TradeAction(action_str) if action_str in ["skip", "execute", "modify"] else TradeAction.SKIP
 
-                # FIX: Handle None modified_params safely
                 modified_params = data.get("modified_params") or {}
 
                 return TradeDecision(
@@ -367,9 +328,8 @@ class TradingService:
         if not all([signal.ticker, entry, target, stop_loss]):
             return TradeResult(success=False, error="Missing required trade parameters")
 
-        quantity = 1  # TODO: Calculate based on portfolio
+        quantity = 1
 
-        # Check if we should actually execute or just simulate
         if not trading_config.execute_orders:
             logger.info(f"[DRY RUN] Would execute: {signal.ticker} @ {entry} | TP: {target} | SL: {stop_loss}")
             return TradeResult(
