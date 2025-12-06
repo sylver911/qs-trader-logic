@@ -1,4 +1,4 @@
-"""Trading service - main business logic - FIXED VERSION."""
+"""Trading service - main business logic - QS Optimized Version."""
 
 import json
 import logging
@@ -65,17 +65,21 @@ class TradingService:
                 self._save_skip_result(signal, validation_error)
                 return True
 
+            # Get basic market data for context (non-blocking)
             market_data = self._get_market_data(signal.ticker)
 
+            # Portfolio data for context
             if trading_config.execute_orders:
                 portfolio = self._portfolio_tools.get_portfolio_summary()
                 portfolio_data = portfolio.to_dict() if portfolio else {}
             else:
-                logger.debug("Dry run mode - using empty portfolio")
-                portfolio_data = {"positions": [], "cash": 100000, "pnl": 0}
+                logger.debug("Dry run mode - using simulated portfolio")
+                portfolio_data = {"positions": [], "cash": 10000, "pnl": 0}
 
+            # Let AI analyze and decide
             ai_response = self._analyze_with_ai(signal, market_data, portfolio_data)
 
+            # Execute if AI decided to
             if ai_response.decision.action == TradeAction.EXECUTE:
                 trade_result = self._execute_trade(signal, ai_response)
                 ai_response.trade_result = trade_result
@@ -103,47 +107,51 @@ class TradingService:
         return None
 
     def _validate_preconditions(self, signal: Signal) -> Optional[str]:
-        """Validate trading preconditions."""
+        """Validate trading preconditions.
+        
+        These are hard stops that don't need AI evaluation.
+        """
+        # Emergency stop - immediate block
         if trading_config.emergency_stop:
             return "Emergency stop is active"
 
+        # Get ticker (try parsed, then raw)
         ticker = signal.ticker
-
         if not ticker and signal.tickers_raw:
-            logger.info(f"No clean ticker parsed, but have raw: {signal.tickers_raw} - letting LLM decide")
+            logger.info(f"No clean ticker, using raw: {signal.tickers_raw}")
             ticker = signal.tickers_raw.split(',')[0].strip() if signal.tickers_raw else None
 
+        # No ticker and no content - can't process
         if not ticker:
             if signal.get_full_content() and len(signal.get_full_content()) > 50:
-                logger.info("No ticker found but signal has content - letting LLM analyze")
+                logger.info("No ticker but has content - letting AI analyze")
                 return None
-            return "No ticker found in signal and insufficient content"
+            return "No ticker found and insufficient content"
 
-        if ticker and not self._is_valid_ticker(ticker):
-            logger.warning(f"Ticker '{ticker}' may be invalid, but proceeding for LLM analysis")
-
+        # Whitelist check
         whitelist = trading_config.whitelist_tickers
         if whitelist and ticker and ticker not in whitelist:
-            return f"Ticker {ticker} not in whitelist"
+            return f"Ticker {ticker} not in whitelist: {whitelist}"
 
+        # Blacklist check
         blacklist = trading_config.blacklist_tickers
         if ticker and ticker in blacklist:
             return f"Ticker {ticker} is blacklisted"
 
+        # Low confidence from signal itself (not AI)
         if signal.confidence and signal.confidence < trading_config.min_ai_confidence_score:
-            return f"Signal confidence {signal.confidence:.0%} below minimum"
+            return f"Signal confidence {signal.confidence:.0%} below minimum {trading_config.min_ai_confidence_score:.0%}"
 
-        if not trading_config.execute_orders:
-            logger.debug("Dry run mode - skipping IBKR validation")
-            return None
+        # VIX check (only in live mode)
+        if trading_config.execute_orders:
+            vix = self._market_data.get_vix()
+            if vix and vix > trading_config.max_vix_level:
+                return f"VIX {vix:.1f} above maximum {trading_config.max_vix_level}"
 
-        vix = self._market_data.get_vix()
-        if vix and vix > trading_config.max_vix_level:
-            return f"VIX {vix:.1f} above maximum {trading_config.max_vix_level}"
-
-        positions = self._broker.get_positions()
-        if len(positions) >= trading_config.max_concurrent_positions:
-            return f"Max concurrent positions reached"
+            # Max positions check
+            positions = self._broker.get_positions()
+            if len(positions) >= trading_config.max_concurrent_positions:
+                return f"Max concurrent positions ({trading_config.max_concurrent_positions}) reached"
 
         return None
 
@@ -151,10 +159,8 @@ class TradingService:
         """Validate ticker format."""
         if not ticker:
             return False
-
         if not ticker.isalpha():
             return False
-
         if len(ticker) > 6:
             return False
 
@@ -162,19 +168,14 @@ class TradingService:
             'EXPLOSIVE', 'WSB', 'YOLO', 'HODL', 'MOON', 'APE',
             'STONK', 'STONKS', 'ALERT', 'SIGNAL', 'BUY', 'SELL',
             'CALL', 'PUT', 'OPTIONS', 'TRADING', 'STOCK', 'STOCKS',
-            'UPDATE', 'NEWS', 'BREAKING', 'URGENT', 'HOT', 'NEW',
         }
-
-        if ticker.upper() in invalid_tickers:
-            return False
-
-        return True
+        return ticker.upper() not in invalid_tickers
 
     def _get_market_data(self, ticker: str) -> Dict[str, Any]:
-        """Get market data for a ticker."""
+        """Get market data for context (minimal)."""
         if not ticker:
             return {}
-        return self._market_data.get_market_data(ticker)
+        return {"symbol": ticker, "timestamp": datetime.now().isoformat()}
 
     def _analyze_with_ai(
         self,
@@ -182,7 +183,9 @@ class TradingService:
         market_data: Dict[str, Any],
         portfolio_data: Dict[str, Any],
     ) -> AIResponse:
-        """Analyze signal with AI with iterative tool calling."""
+        """Analyze signal with AI using iterative tool calling."""
+        
+        # Combine all tools
         tools = (
             MarketTools.get_tool_definitions()
             + PortfolioTools.get_tool_definitions()
@@ -206,14 +209,14 @@ class TradingService:
             tools=tools,
         )
 
-        # Build message history for multi-turn
+        # Build message history
         messages = [
             {"role": "system", "content": self._llm._get_system_prompt()},
             {"role": "user", "content": response.get("_prompt", "")},
         ]
 
         # Iterative tool calling loop
-        max_iterations = 10
+        max_iterations = 8  # Reduced from 10 - should decide faster
         iteration = 0
 
         while response.get("tool_calls") and iteration < max_iterations:
@@ -228,9 +231,9 @@ class TradingService:
 
             for result in tool_results:
                 if result["success"]:
-                    logger.info(f"Tool executed: {result['function']} -> {str(result.get('result', ''))[:100]}")
+                    logger.info(f"Tool: {result['function']} -> OK")
                 else:
-                    logger.warning(f"Tool failed: {result['function']} - {result.get('error')}")
+                    logger.warning(f"Tool: {result['function']} -> ERROR: {result.get('error')}")
 
             # Add assistant message with tool calls
             messages.append({
@@ -249,13 +252,13 @@ class TradingService:
                 ],
             })
 
-            # Add tool results - USE CUSTOM SERIALIZER for Timestamp handling
+            # Add tool results
             for result in tool_results:
                 try:
                     result_content = result.get("result") if result["success"] else {"error": result.get("error")}
                     serialized_content = json.dumps(result_content, default=json_serializer)
                 except TypeError as e:
-                    logger.warning(f"Serialization error for {result.get('function')}: {e}")
+                    logger.warning(f"Serialization error: {e}")
                     serialized_content = json.dumps({"error": f"Serialization error: {str(e)}"})
 
                 messages.append({
@@ -264,15 +267,14 @@ class TradingService:
                     "content": serialized_content,
                 })
 
-            # FIXED: Use correct parameter name "messages" instead of "original_messages"
-            # and don't pass "tool_results" which doesn't exist as a parameter
+            # Continue conversation
             response = self._llm.continue_with_tool_results(
-                messages=messages,  # FIXED: was "original_messages"
+                messages=messages,
                 tools=tools,
             )
 
         if iteration >= max_iterations:
-            logger.warning(f"Max tool call iterations ({max_iterations}) reached")
+            logger.warning(f"Max iterations ({max_iterations}) reached")
 
         # Parse final decision
         decision = self._parse_decision(response.get("content", ""))
@@ -296,16 +298,17 @@ class TradingService:
                 action_str = data.get("action", "skip").lower()
                 action = TradeAction(action_str) if action_str in ["skip", "execute", "modify"] else TradeAction.SKIP
 
-                modified_params = data.get("modified_params") or {}
-
+                # Extract bracket parameters
+                bracket = data.get("bracket") or {}
+                
                 return TradeDecision(
                     action=action,
                     reasoning=data.get("reasoning", ""),
                     confidence=float(data.get("confidence", 0)),
-                    modified_entry=modified_params.get("entry_price"),
-                    modified_target=modified_params.get("target_price"),
-                    modified_stop_loss=modified_params.get("stop_loss"),
-                    modified_size=modified_params.get("size"),
+                    modified_entry=bracket.get("entry_price"),
+                    modified_target=bracket.get("take_profit"),
+                    modified_stop_loss=bracket.get("stop_loss"),
+                    modified_size=bracket.get("quantity"),
                     skip_reason=data.get("reasoning") if action == TradeAction.SKIP else None,
                 )
         except (json.JSONDecodeError, ValueError) as e:
@@ -321,23 +324,25 @@ class TradingService:
         """Execute a trade based on AI decision."""
         decision = ai_response.decision
 
+        # Use AI's bracket parameters, fallback to signal
         entry = decision.modified_entry or signal.entry_price
         target = decision.modified_target or signal.target_price
         stop_loss = decision.modified_stop_loss or signal.stop_loss
+        quantity = int(decision.modified_size) if decision.modified_size else 1
 
         if not all([signal.ticker, entry, target, stop_loss]):
             return TradeResult(success=False, error="Missing required trade parameters")
 
-        quantity = 1
-
+        # Dry run mode
         if not trading_config.execute_orders:
-            logger.info(f"[DRY RUN] Would execute: {signal.ticker} @ {entry} | TP: {target} | SL: {stop_loss}")
+            logger.info(f"[DRY RUN] {signal.ticker} @ ${entry} | TP: ${target} | SL: ${stop_loss} | Qty: {quantity}")
             return TradeResult(
                 success=True,
                 order_id="DRY_RUN_SIMULATED",
                 simulated=True,
             )
 
+        # Live execution
         try:
             result = self._order_tools.place_bracket_order(
                 symbol=signal.ticker,
@@ -349,7 +354,7 @@ class TradingService:
             )
 
             if result.get("success"):
-                logger.info(f"Trade executed: {signal.ticker} @ {entry}")
+                logger.info(f"Trade executed: {signal.ticker} @ ${entry}")
                 return TradeResult(
                     success=True,
                     order_id=str(result.get("order", {}).get("order_id", "")),

@@ -1,20 +1,55 @@
-{# DeepSeek Reasoner - Optimized #}
-## SIGNAL
-**{{ signal.ticker }}** {{ signal.direction }}{% if signal.strike %} {{ signal.expiry }} ${{ '{:.0f}'.format(signal.strike) }}{% endif %}
-Entry: ${{ '{:.2f}'.format(signal.entry_price) if signal.entry_price else 'MARKET' }}{% if signal.target_price %} | Target: ${{ '{:.2f}'.format(signal.target_price) }}{% endif %}{% if signal.stop_loss %} | Stop: ${{ '{:.2f}'.format(signal.stop_loss) }}{% endif %}
+{# QS Signal Analysis Template - Optimized for Execution Validation #}
 
-{% if signal.full_content %}Raw: {{ signal.full_content }}{% endif %}
+## QS SIGNAL TO VALIDATE
+
+**Ticker:** {{ signal.ticker or signal.tickers_raw or 'UNKNOWN' }}
+**Direction:** {{ signal.direction or 'UNKNOWN' }}
+{% if signal.strike %}**Strike:** ${{ '{:.2f}'.format(signal.strike) }}{% endif %}
+{% if signal.expiry %}**Expiry:** {{ signal.expiry }}{% endif %}
+
+### Signal Parameters
+- **Entry Price:** {% if signal.entry_price %}${{ '{:.2f}'.format(signal.entry_price) }}{% else %}MARKET{% endif %}
+- **Target:** {% if signal.target_price %}${{ '{:.2f}'.format(signal.target_price) }}{% else %}NOT SPECIFIED{% endif %}
+- **Stop Loss:** {% if signal.stop_loss %}${{ '{:.2f}'.format(signal.stop_loss) }}{% else %}NOT SPECIFIED{% endif %}
+- **Confidence:** {% if signal.confidence %}{{ '{:.0%}'.format(signal.confidence) }}{% else %}N/A{% endif %}
+
+{% if signal.entry_price and signal.target_price and signal.stop_loss %}
+### Signal's R:R (at signal time)
+{% set risk = signal.entry_price - signal.stop_loss %}
+{% set reward = signal.target_price - signal.entry_price %}
+{% set rr = (reward / risk) if risk > 0 else 0 %}
+- Risk: ${{ '{:.2f}'.format(risk) }} per contract
+- Reward: ${{ '{:.2f}'.format(reward) }} per contract
+- R:R Ratio: {{ '{:.2f}'.format(rr) }}:1 {% if rr < 1.5 %}⚠️ LOW{% elif rr >= 2 %}✅ GOOD{% endif %}
+{% endif %}
 
 ---
-## NOW
-**{{ current_time }}** EST | Market: **{{ 'OPEN' if market_open else 'CLOSED' }}**
-{% if signal.expiry == today_date and not market_open %}⚠️ 0DTE + Market closed = SKIP{% endif %}
+
+## RAW SIGNAL CONTENT
+
+{{ signal.full_content or 'No content available' }}
 
 ---
-## MINDSET
-Trust the signal. Small position, tight stop, let winners run.
-Skip ONLY for: closed market, 0DTE expired, or broken setup (price way past entry).
-When in doubt → execute small.
+
+## TRADING CONFIG
+
+- Max Position Size: {{ '{:.0%}'.format(config.max_position_size_percent) }} of portfolio
+- Max Concurrent Positions: {{ config.max_concurrent_positions }}
+- Max VIX Level: {{ config.max_vix_level }}
+- Execute Orders: {{ 'LIVE' if config.execute_orders else 'DRY RUN (simulation)' }}
 
 ---
-Decide: execute or skip.
+
+## YOUR TASK
+
+1. **FIRST:** Call `get_current_time` to check if market is open
+2. **IF CLOSED:** Skip immediately, no need for more tools
+3. **IF OPEN:** 
+   - Call `get_option_chain` for {{ signal.ticker }} to get CURRENT option price
+   - Calculate CURRENT R:R based on current prices
+   - If R:R < 1.5 → Skip
+   - If R:R >= 1.5 → Check account and positions, then execute
+
+4. **Design bracket:** If executing, specify optimal entry/target/stop based on CURRENT prices
+
+**Output your decision as JSON.**
