@@ -236,7 +236,8 @@ class TradingService:
                     logger.warning(f"Tool: {result['function']} -> ERROR: {result.get('error')}")
 
             # Add assistant message with tool calls
-            messages.append({
+            # DeepSeek Reasoner REQUIRES reasoning_content in assistant messages
+            assistant_msg = {
                 "role": "assistant",
                 "content": response.get("content", ""),
                 "tool_calls": [
@@ -250,7 +251,11 @@ class TradingService:
                     }
                     for tc in response["tool_calls"]
                 ],
-            })
+            }
+            # Add reasoning_content if present (required for DeepSeek Reasoner)
+            if response.get("reasoning_content"):
+                assistant_msg["reasoning_content"] = response["reasoning_content"]
+            messages.append(assistant_msg)
 
             # Add tool results
             for result in tool_results:
