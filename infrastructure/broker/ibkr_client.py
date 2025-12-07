@@ -1,6 +1,7 @@
 """IBKR client wrapper using IBind."""
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from ibind import IbkrClient
@@ -258,6 +259,11 @@ class IBKRBroker:
     ) -> Optional[Dict[str, Any]]:
         """Place a bracket order (entry + TP + SL).
 
+        Creates a parent-child order structure where:
+        - Entry order is the parent
+        - TP and SL are children with OCA (One-Cancels-All) grouping
+        - When TP fills, SL is cancelled and vice versa
+
         Args:
             conid: Contract ID
             side: BUY or SELL
@@ -265,7 +271,7 @@ class IBKRBroker:
             entry_price: Entry limit price
             take_profit: Take profit price
             stop_loss: Stop loss price
-            tif: Time in force
+            tif: Time in force for entry order
 
         Returns:
             Order result
@@ -273,11 +279,16 @@ class IBKRBroker:
         try:
             client = self._get_client()
 
-            # Parent order
-            parent_coid = f"parent_{conid}_{int(time.time())}"
+            # Unique IDs for order linkage
+            timestamp = int(time.time())
+            parent_coid = f"parent_{conid}_{timestamp}"
+            oca_group = f"oca_{conid}_{timestamp}"  # OCA group for TP and SL
+
+            # Exit side is opposite of entry
+            exit_side = "SELL" if side == "BUY" else "BUY"
 
             orders = [
-                # Entry order
+                # Entry order (parent)
                 make_order_request(
                     conid=conid,
                     side=side,
@@ -288,27 +299,29 @@ class IBKRBroker:
                     acct_id=self._account_id,
                     coid=parent_coid,
                 ),
-                # Take profit
+                # Take profit (child, OCA with stop loss)
                 make_order_request(
                     conid=conid,
-                    side="SELL" if side == "BUY" else "BUY",
+                    side=exit_side,
                     quantity=quantity,
                     order_type="LMT",
                     price=take_profit,
                     tif="GTC",
                     acct_id=self._account_id,
                     parent_id=parent_coid,
+                    is_single_group=True,  # Enable OCA grouping
                 ),
-                # Stop loss
+                # Stop loss (child, OCA with take profit)
                 make_order_request(
                     conid=conid,
-                    side="SELL" if side == "BUY" else "BUY",
+                    side=exit_side,
                     quantity=quantity,
                     order_type="STP",
                     aux_price=stop_loss,
                     tif="GTC",
                     acct_id=self._account_id,
                     parent_id=parent_coid,
+                    is_single_group=True,  # Enable OCA grouping
                 ),
             ]
 
@@ -322,7 +335,7 @@ class IBKRBroker:
 
             logger.info(
                 f"Bracket order placed: {side} {quantity} @ {entry_price}, "
-                f"TP: {take_profit}, SL: {stop_loss}"
+                f"TP: {take_profit}, SL: {stop_loss}, OCA: {oca_group}"
             )
             return result.data
 
@@ -421,6 +434,3 @@ class IBKRBroker:
             quantity=quantity,
             order_type="MKT",
         )
-
-
-import time  # Add at top

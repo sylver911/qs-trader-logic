@@ -189,6 +189,19 @@ class TradingService:
             positions = self._broker.get_positions()
             if len(positions) >= trading_config.max_concurrent_positions:
                 return f"Max concurrent positions ({trading_config.max_concurrent_positions}) reached"
+            
+            # Duplicate position check - prevent entering same ticker twice
+            if ticker and positions:
+                existing_tickers = set()
+                for pos in positions:
+                    # Extract base ticker from position (handles option symbols like "SPY 241206C00605000")
+                    pos_symbol = pos.get("symbol", "") or pos.get("ticker", "")
+                    base_ticker = pos_symbol.split()[0].upper() if pos_symbol else ""
+                    if base_ticker:
+                        existing_tickers.add(base_ticker)
+                
+                if ticker.upper() in existing_tickers:
+                    return f"Already have position in {ticker} - duplicate entry blocked"
 
         return None
 
