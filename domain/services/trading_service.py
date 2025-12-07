@@ -215,8 +215,11 @@ class TradingService:
             {"role": "user", "content": response.get("_prompt", "")},
         ]
 
+        # Tool call tracking for efficiency
+        tool_cache = {}  # Cache results to detect duplicates
+        
         # Iterative tool calling loop
-        max_iterations = 8  # Reduced from 10 - should decide faster
+        max_iterations = 8
         iteration = 0
 
         while response.get("tool_calls") and iteration < max_iterations:
@@ -224,19 +227,59 @@ class TradingService:
             logger.info(f"Tool call iteration {iteration}")
 
             # Execute tool calls
-            tool_results = self._llm.execute_tool_calls(
-                response["tool_calls"],
-                handlers,
-            )
-
-            for result in tool_results:
-                if result["success"]:
-                    logger.info(f"Tool: {result['function']} -> OK")
+            tool_results = []
+            for call in response["tool_calls"]:
+                func_name = call["function"]
+                args = call["arguments"]
+                args_key = json.dumps(args, sort_keys=True, default=str)
+                cache_key = f"{func_name}:{args_key}"
+                
+                # Check for duplicate calls
+                if cache_key in tool_cache:
+                    logger.info(f"Tool {func_name} (CACHED - duplicate call)")
+                    result = {
+                        "call_id": call["id"],
+                        "function": func_name,
+                        "result": {
+                            **tool_cache[cache_key],
+                            "_warning": f"DUPLICATE CALL! You already called {func_name}. OUTPUT your decision NOW!"
+                        },
+                        "success": True,
+                    }
                 else:
-                    logger.warning(f"Tool: {result['function']} -> ERROR: {result.get('error')}")
+                    # Execute new tool call
+                    handler = handlers.get(func_name)
+                    if handler:
+                        try:
+                            tool_result = handler(**args)
+                            tool_cache[cache_key] = tool_result
+                            result = {
+                                "call_id": call["id"],
+                                "function": func_name,
+                                "result": tool_result,
+                                "success": True,
+                            }
+                            logger.info(f"Tool {func_name} -> OK")
+                        except Exception as e:
+                            result = {
+                                "call_id": call["id"],
+                                "function": func_name,
+                                "error": str(e),
+                                "success": False,
+                            }
+                            logger.warning(f"Tool {func_name} -> ERROR: {e}")
+                    else:
+                        result = {
+                            "call_id": call["id"],
+                            "function": func_name,
+                            "error": "Unknown function",
+                            "success": False,
+                        }
+                        logger.warning(f"Unknown tool: {func_name}")
+                
+                tool_results.append(result)
 
             # Add assistant message with tool calls
-            # DeepSeek Reasoner REQUIRES reasoning_content in assistant messages
             assistant_msg = {
                 "role": "assistant",
                 "content": response.get("content", ""),
@@ -270,6 +313,20 @@ class TradingService:
                     "role": "tool",
                     "tool_call_id": result["call_id"],
                     "content": serialized_content,
+                })
+
+            # Add tool history reminder after 2+ unique tool calls
+            if len(tool_cache) >= 2:
+                tool_summary = "\n---\n## TOOLS ALREADY CALLED (DO NOT CALL AGAIN):\n"
+                for cached_key, cached_result in tool_cache.items():
+                    tool_name = cached_key.split(":")[0]
+                    result_preview = json.dumps(cached_result, default=str)[:150]
+                    tool_summary += f"- {tool_name}: {result_preview}...\n"
+                tool_summary += "\nYou have the data. OUTPUT your JSON decision NOW!\n---"
+                
+                messages.append({
+                    "role": "user",
+                    "content": tool_summary
                 })
 
             # Continue conversation
