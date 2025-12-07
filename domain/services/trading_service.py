@@ -473,8 +473,36 @@ class TradingService:
         # Log AI analysis summary
         logger.info(f"   📊 AI Analysis complete: {iteration} iteration(s), {total_tool_calls} tool call(s)")
 
+        # Get content from response, or check if last response was a tool call without content
+        content = response.get("content", "")
+        
+        # If no content but we had tool calls, the AI might have only responded with tool calls
+        # In this case, we need to look at what tools were called to infer the decision
+        if not content and total_tool_calls > 0:
+            logger.warning(f"No content in final response, but {total_tool_calls} tool calls were made")
+            # Check the last tool calls to see if we can infer a decision
+            last_tool_calls = response.get("tool_calls", [])
+            if last_tool_calls:
+                tool_names = [tc.get("function", "") for tc in last_tool_calls]
+                logger.info(f"Last tool calls: {tool_names}")
+                # If the AI wanted to call skip_signal but it wasn't processed, treat as skip
+                if "skip_signal" in tool_names:
+                    for tc in last_tool_calls:
+                        if tc.get("function") == "skip_signal":
+                            args = tc.get("arguments", {})
+                            return AIResponse(
+                                decision=TradeDecision(
+                                    action=TradeAction.SKIP,
+                                    reasoning=args.get("reason", "AI called skip_signal"),
+                                    skip_reason=args.get("category", "other"),
+                                ),
+                                raw_response=json.dumps(args),
+                                model_used=response.get("model", ""),
+                                trace_id=last_request_id,
+                            )
+
         # Parse final decision
-        decision = self._parse_decision(response.get("content", ""))
+        decision = self._parse_decision(content)
 
         return AIResponse(
             decision=decision,
