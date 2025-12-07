@@ -127,6 +127,7 @@ class LLMClient:
                 "tool_calls": tool_calls,
                 "reasoning_content": reasoning_content,
                 "model": model,
+                "request_id": response.id,  # LiteLLM request ID for trace linking
                 "_prompt": prompt,
                 "usage": {
                     "prompt_tokens": response.usage.prompt_tokens,
@@ -254,6 +255,7 @@ class LLMClient:
                 "tool_calls": tool_calls,
                 "reasoning_content": reasoning_content,
                 "model": model,
+                "request_id": response.id,  # LiteLLM request ID for trace linking
             }
 
         except Exception as e:

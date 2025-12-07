@@ -225,6 +225,9 @@ class TradingService:
             trading_params=trading_params,
             tools=tools,
         )
+        
+        # Track request_id for trace linking (use last one from conversation)
+        last_request_id = response.get("request_id")
 
         # Build message history
         messages = [
@@ -293,6 +296,7 @@ class TradingService:
                                     ),
                                     raw_response=json.dumps(tool_result),
                                     model_used=response.get("model", ""),
+                                    trace_id=last_request_id,
                                 )
                             
                             # If place_bracket_order tool was called, return with execute decision
@@ -310,6 +314,7 @@ class TradingService:
                                     ),
                                     raw_response=json.dumps(tool_result),
                                     model_used=response.get("model", ""),
+                                    trace_id=last_request_id,
                                 )
                         except Exception as e:
                             result = {
@@ -385,6 +390,10 @@ class TradingService:
                 messages=messages,
                 tools=tools,
             )
+            
+            # Update request_id (use the last one for trace linking)
+            if response.get("request_id"):
+                last_request_id = response["request_id"]
 
         if iteration >= max_iterations:
             logger.warning(f"⚠️ Max iterations ({max_iterations}) reached - forcing decision")
@@ -399,6 +408,7 @@ class TradingService:
             decision=decision,
             raw_response=response.get("content", ""),
             model_used=response.get("model", ""),
+            trace_id=last_request_id,
         )
 
     def _parse_decision(self, content: str) -> TradeDecision:
@@ -486,14 +496,18 @@ class TradingService:
         """Save AI result to MongoDB."""
         with MongoHandler() as mongo:
             ai_data = ai_response.to_mongo_update()
+            update_data = {
+                "ai_processed": True,
+                "ai_processed_at": datetime.now().isoformat(),
+                "ai_result": ai_data,
+            }
+            # Also save trace_id at thread root level for easy querying
+            if ai_response.trace_id:
+                update_data["trace_id"] = ai_response.trace_id
             mongo.update_one(
                 config.THREADS_COLLECTION,
                 query={"thread_id": signal.thread_id},
-                update_data={
-                    "ai_processed": True,
-                    "ai_processed_at": datetime.now().isoformat(),
-                    "ai_result": ai_data,
-                },
+                update_data=update_data,
             )
         logger.debug(f"Saved AI result for {signal.thread_id}")
 

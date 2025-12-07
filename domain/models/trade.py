@@ -130,11 +130,12 @@ class AIResponse:
     trade_result: Optional[TradeResult] = None
     raw_response: str = ""
     model_used: str = ""
+    trace_id: Optional[str] = None  # LiteLLM request_id for trace linking
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def to_mongo_update(self) -> Dict[str, Any]:
         """Convert to MongoDB update format for 'ai' field."""
-        return {
+        result = {
             "decision": self.decision.to_dict(),
             "trade_result": self.trade_result.to_dict() if self.trade_result else None,
             "act": self.decision.action.value,
@@ -142,3 +143,6 @@ class AIResponse:
             "model_used": self.model_used,
             "timestamp": self.timestamp,
         }
+        if self.trace_id:
+            result["trace_id"] = self.trace_id
+        return result
