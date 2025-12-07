@@ -1,0 +1,178 @@
+"""
+Prompt Service - Fetches prompts from MongoDB for AI trading logic.
+
+This service retrieves system prompts and Jinja2 templates from MongoDB,
+with fallback to embedded defaults if MongoDB is unavailable.
+"""
+
+import logging
+from typing import Optional
+
+from config.settings import config
+
+logger = logging.getLogger(__name__)
+
+# Embedded defaults - used if MongoDB unavailable
+_DEFAULT_SYSTEM_PROMPT = """You are a QS (QuantSignals) Trade Execution Agent. Your job is to validate trading signals and design optimal bracket orders.
+
+## YOUR ROLE
+The QS signal has ALREADY been analyzed by sophisticated AI (Katy AI, 4D framework, options flow analysis). 
+Your job is NOT to re-analyze the market. Your job is to:
+1. Validate if the trade can be executed NOW (timing, market status)
+2. Check current prices vs signal prices  
+3. Design optimal bracket (entry, target, stop)
+4. Calculate if R:R is acceptable (>= 1.5)
+
+## WORKFLOW
+
+1. **FIRST: Call get_current_time** - If market closed → SKIP immediately, no more tools
+2. **IF OPEN: Call get_option_chain** - Get current option price for R:R calculation
+3. **Calculate R:R** - If < 1.5 → SKIP, no need to check account
+4. **IF R:R OK: Check account/positions** - Only if planning to execute
+5. **Design bracket** - Optimal entry/target/stop
+
+## EFFICIENCY RULES - CRITICAL!
+- If market closed → SKIP immediately, no more tools needed
+- If R:R < 1.5 → SKIP immediately, no need to check account
+- **NEVER call the same tool twice** - you already have that data!
+- **Maximum 4-5 tool calls per signal** - if you have enough info, OUTPUT your decision
+- DON'T call get_ticker_price - the option chain has all pricing info you need
+
+## OUTPUT FORMAT
+
+After gathering info, provide your decision as JSON:
+
+```json
+{
+    "action": "execute" | "skip",
+    "reasoning": "Clear explanation of your decision",
+    "confidence": 0.0-1.0,
+    "risk_reward_ratio": 2.5,
+    "bracket": {
+        "symbol": "SPY",
+        "direction": "CALL",
+        "strike": 686.0,
+        "entry_price": 1.85,
+        "take_profit": 2.50,
+        "stop_loss": 1.40,
+        "quantity": 2
+    }
+}
+```
+
+## REMEMBER
+- Trust the QS signal analysis - your job is execution validation
+- Be EFFICIENT with tool calls - each one costs time
+- LOSE SMALL, WIN BIG"""
+
+
+_DEFAULT_USER_TEMPLATE = """{# QS Signal Analysis Template #}
+
+## QS SIGNAL TO VALIDATE
+
+**Ticker:** {{ signal.ticker or signal.tickers_raw or 'UNKNOWN' }}
+**Direction:** {{ signal.direction or 'UNKNOWN' }}
+{% if signal.strike %}**Strike:** ${{ '{:.2f}'.format(signal.strike) }}{% endif %}
+{% if signal.expiry %}**Expiry:** {{ signal.expiry }}{% endif %}
+
+### Signal Parameters
+- **Entry Price:** {% if signal.entry_price %}${{ '{:.2f}'.format(signal.entry_price) }}{% else %}MARKET{% endif %}
+- **Target:** {% if signal.target_price %}${{ '{:.2f}'.format(signal.target_price) }}{% else %}NOT SPECIFIED{% endif %}
+- **Stop Loss:** {% if signal.stop_loss %}${{ '{:.2f}'.format(signal.stop_loss) }}{% else %}NOT SPECIFIED{% endif %}
+
+---
+
+## RAW SIGNAL CONTENT
+
+{{ signal.full_content or 'No content available' }}
+
+---
+
+## YOUR TASK
+
+1. **FIRST:** Call `get_current_time` to check if market is open
+2. **IF OPEN:** Call `get_option_chain` for {{ signal.ticker }} to get CURRENT option price
+3. **Calculate R:R** - If < 1.5 → Skip
+4. **Design bracket:** If executing, specify optimal entry/target/stop
+
+**Output your decision as JSON.**"""
+
+
+# MongoDB client (lazy loaded)
+_mongo_client = None
+
+
+def _get_mongo_client():
+    """Get MongoDB client singleton."""
+    global _mongo_client
+    if _mongo_client is None:
+        try:
+            from pymongo import MongoClient
+            mongo_url = config.MONGO_URL
+            if mongo_url:
+                _mongo_client = MongoClient(mongo_url)
+                logger.info("Connected to MongoDB for prompts")
+            else:
+                logger.warning("MONGO_URL not set - using default prompts")
+        except Exception as e:
+            logger.warning(f"MongoDB connection failed: {e} - using default prompts")
+    return _mongo_client
+
+
+def get_system_prompt() -> str:
+    """Get the active system prompt from MongoDB or default."""
+    try:
+        client = _get_mongo_client()
+        if client:
+            db = client.get_database(config.MONGO_DB_NAME or "qs")
+            prompt = db.prompts.find_one({"type": "system_prompt", "is_active": True})
+            if prompt:
+                return prompt.get("content", _DEFAULT_SYSTEM_PROMPT)
+    except Exception as e:
+        logger.warning(f"Failed to fetch system prompt from MongoDB: {e}")
+    
+    return _DEFAULT_SYSTEM_PROMPT
+
+
+def get_user_template() -> str:
+    """Get the active user template from MongoDB or default."""
+    try:
+        client = _get_mongo_client()
+        if client:
+            db = client.get_database(config.MONGO_DB_NAME or "qs")
+            prompt = db.prompts.find_one({"type": "user_template", "is_active": True})
+            if prompt:
+                return prompt.get("content", _DEFAULT_USER_TEMPLATE)
+    except Exception as e:
+        logger.warning(f"Failed to fetch user template from MongoDB: {e}")
+    
+    return _DEFAULT_USER_TEMPLATE
+
+
+# Cache for performance
+_cached_system_prompt: Optional[str] = None
+_cached_user_template: Optional[str] = None
+
+
+def get_system_prompt_cached() -> str:
+    """Get system prompt with caching (refresh by restarting service)."""
+    global _cached_system_prompt
+    if _cached_system_prompt is None:
+        _cached_system_prompt = get_system_prompt()
+    return _cached_system_prompt
+
+
+def get_user_template_cached() -> str:
+    """Get user template with caching (refresh by restarting service)."""
+    global _cached_user_template
+    if _cached_user_template is None:
+        _cached_user_template = get_user_template()
+    return _cached_user_template
+
+
+def refresh_cache():
+    """Clear cached prompts to reload from MongoDB."""
+    global _cached_system_prompt, _cached_user_template
+    _cached_system_prompt = None
+    _cached_user_template = None
+    logger.info("Prompt cache cleared - will reload from MongoDB")

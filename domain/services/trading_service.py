@@ -51,18 +51,26 @@ class TradingService:
         thread_id = task.get("thread_id", "")
         thread_name = task.get("thread_name", "")
 
-        logger.info(f"Processing signal: {thread_name} ({thread_id})")
+        logger.info("=" * 50)
+        logger.info(f"📥 SIGNAL RECEIVED: {thread_name}")
+        logger.info(f"   Thread ID: {thread_id}")
 
         try:
             signal = self._load_signal(thread_id)
             if not signal:
-                logger.error(f"Signal not found: {thread_id}")
+                logger.error(f"❌ Signal not found in MongoDB: {thread_id}")
                 return False
+
+            logger.info(f"   Ticker: {signal.ticker or 'N/A'} | Direction: {signal.direction or 'N/A'}")
+            if signal.entry_price:
+                logger.info(f"   Entry: ${signal.entry_price} | Target: ${signal.target_price} | SL: ${signal.stop_loss}")
 
             validation_error = self._validate_preconditions(signal)
             if validation_error:
-                logger.warning(f"Validation failed: {validation_error}")
+                logger.warning(f"⚠️ Validation failed: {validation_error}")
                 self._save_skip_result(signal, validation_error)
+                logger.info(f"📋 DECISION: SKIP (validation) | {validation_error}")
+                logger.info("=" * 50)
                 return True
 
             # Get basic market data for context (non-blocking)
@@ -77,18 +85,27 @@ class TradingService:
                 portfolio_data = {"positions": [], "cash": 10000, "pnl": 0}
 
             # Let AI analyze and decide
+            logger.info("🤖 Starting AI analysis...")
             ai_response = self._analyze_with_ai(signal, market_data, portfolio_data)
 
             # Execute if AI decided to
             if ai_response.decision.action == TradeAction.EXECUTE:
+                logger.info("💰 Executing trade...")
                 trade_result = self._execute_trade(signal, ai_response)
                 ai_response.trade_result = trade_result
+                if trade_result.success:
+                    logger.info(f"   ✅ Trade executed: {trade_result.order_id}")
+                else:
+                    logger.error(f"   ❌ Trade failed: {trade_result.error}")
 
             self._save_result(signal, ai_response)
 
-            logger.info(
-                f"Signal processed: {thread_name} -> {ai_response.decision.action.value}"
-            )
+            # Final decision summary
+            decision = ai_response.decision
+            action_emoji = "✅" if decision.action == TradeAction.EXECUTE else "⏭️"
+            logger.info(f"📋 DECISION: {decision.action.value.upper()} | Confidence: {decision.confidence:.0%}")
+            logger.info(f"{action_emoji} Reasoning: {decision.reasoning[:100]}..." if len(decision.reasoning) > 100 else f"{action_emoji} Reasoning: {decision.reasoning}")
+            logger.info("=" * 50)
             return True
 
         except Exception as e:
@@ -221,10 +238,14 @@ class TradingService:
         # Iterative tool calling loop
         max_iterations = 8
         iteration = 0
+        total_tool_calls = 0
 
         while response.get("tool_calls") and iteration < max_iterations:
             iteration += 1
-            logger.info(f"Tool call iteration {iteration}")
+            num_calls = len(response["tool_calls"])
+            total_tool_calls += num_calls
+            tool_names = [tc["function"] for tc in response["tool_calls"]]
+            logger.info(f"   🔧 Iteration {iteration}: {num_calls} tool call(s) - {', '.join(tool_names)}")
 
             # Execute tool calls
             tool_results = []
@@ -236,7 +257,7 @@ class TradingService:
                 
                 # Check for duplicate calls
                 if cache_key in tool_cache:
-                    logger.info(f"Tool {func_name} (CACHED - duplicate call)")
+                    logger.debug(f"Tool {func_name} (CACHED - duplicate call)")
                     result = {
                         "call_id": call["id"],
                         "function": func_name,
@@ -259,7 +280,7 @@ class TradingService:
                                 "result": tool_result,
                                 "success": True,
                             }
-                            logger.info(f"Tool {func_name} -> OK")
+                            logger.debug(f"Tool {func_name} -> OK")
                         except Exception as e:
                             result = {
                                 "call_id": call["id"],
@@ -336,7 +357,10 @@ class TradingService:
             )
 
         if iteration >= max_iterations:
-            logger.warning(f"Max iterations ({max_iterations}) reached")
+            logger.warning(f"⚠️ Max iterations ({max_iterations}) reached - forcing decision")
+
+        # Log AI analysis summary
+        logger.info(f"   📊 AI Analysis complete: {iteration} iteration(s), {total_tool_calls} tool call(s)")
 
         # Parse final decision
         decision = self._parse_decision(response.get("content", ""))

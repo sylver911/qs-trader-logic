@@ -5,11 +5,12 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, BaseLoader
 from litellm import completion
 
 from config.settings import config
 from config.redis_config import trading_config
+from infrastructure.prompts import get_system_prompt_cached, get_user_template_cached
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,19 @@ class LLMClient:
         template_name: str,
         context: Dict[str, Any],
     ) -> str:
-        """Render a Jinja2 template."""
+        """Render a Jinja2 template - uses MongoDB template if available."""
+        try:
+            # Try to get template from MongoDB first
+            user_template = get_user_template_cached()
+            if user_template:
+                # Use string-based template from MongoDB
+                string_env = Environment(trim_blocks=True, lstrip_blocks=True)
+                template = string_env.from_string(user_template)
+                return template.render(**context)
+        except Exception as e:
+            logger.warning(f"MongoDB template failed, falling back to file: {e}")
+        
+        # Fallback to file-based template
         try:
             template = self._env.get_template(template_name)
             return template.render(**context)
@@ -50,84 +63,8 @@ class LLMClient:
             raise
 
     def _get_system_prompt(self) -> str:
-        """Get the QS-optimized system prompt."""
-        return """You are a QS (QuantSignals) Trade Execution Agent. Your job is to validate trading signals and design optimal bracket orders.
-
-## YOUR ROLE
-The QS signal has ALREADY been analyzed by sophisticated AI (Katy AI, 4D framework, options flow analysis). 
-Your job is NOT to re-analyze the market. Your job is to:
-1. Validate if the trade can be executed NOW (timing, market status)
-2. Check current prices vs signal prices  
-3. Design optimal bracket (entry, target, stop)
-4. Calculate if R:R is acceptable (>= 1.5)
-
-## WORKFLOW
-
-1. **FIRST: Call get_current_time** - If market closed → SKIP immediately, no more tools
-2. **IF OPEN: Call get_option_chain** - Get current option price for R:R calculation
-3. **Calculate R:R** - If < 1.5 → SKIP, no need to check account
-4. **IF R:R OK: Check account/positions** - Only if planning to execute
-5. **Design bracket** - Optimal entry/target/stop
-
-## EFFICIENCY RULES - CRITICAL!
-- If market closed → SKIP immediately, no more tools needed
-- If R:R < 1.5 → SKIP immediately, no need to check account
-- **NEVER call the same tool twice** - you already have that data!
-- **Maximum 4-5 tool calls per signal** - if you have enough info, OUTPUT your decision
-- DON'T call get_ticker_price - the option chain has all pricing info you need
-
-## SIGNAL CONTRADICTION CHECK
-If the signal header says "BUY CALLS" but the analysis/recommendation says "BUY PUTS" (or vice versa):
-- This is a CONTRADICTORY signal
-- Consider SKIP due to unclear direction
-- Mention this in your reasoning
-
-## R:R CALCULATION
-- Risk = Entry Price - Stop Loss
-- Reward = Target - Entry Price
-- R:R = Reward / Risk
-- **Minimum R:R = 1.5** (below this → SKIP)
-- Good R:R = 2.0+
-
-## OUTPUT FORMAT
-
-After gathering info, provide your decision as JSON:
-
-```json
-{
-    "action": "execute" | "skip",
-    "reasoning": "Clear explanation of your decision",
-    "confidence": 0.0-1.0,
-    "risk_reward_ratio": 2.5,
-    "bracket": {
-        "symbol": "SPY",
-        "direction": "CALL",
-        "strike": 686.0,
-        "entry_price": 1.85,
-        "take_profit": 2.50,
-        "stop_loss": 1.40,
-        "quantity": 2
-    }
-}
-```
-
-For SKIP decisions, bracket can be null:
-```json
-{
-    "action": "skip",
-    "reasoning": "R:R ratio 1.23 below minimum 1.5 threshold",
-    "confidence": 0.8,
-    "risk_reward_ratio": 1.23,
-    "bracket": null
-}
-```
-
-## REMEMBER
-- Trust the QS signal analysis - your job is execution validation
-- Be EFFICIENT with tool calls - each one costs time
-- If you have the data, OUTPUT immediately - don't keep calling tools
-- Small position, tight stop, let winners run
-- LOSE SMALL, WIN BIG"""
+        """Get the system prompt from MongoDB (cached) or fallback to default."""
+        return get_system_prompt_cached()
 
     def analyze_signal(
         self,
