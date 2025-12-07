@@ -63,12 +63,47 @@ class OrderTools:
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "skip_signal",
+                    "description": "Skip this signal and do not execute any trade. Use this when: (1) Signal has no actionable trade setup, (2) Market is closed, (3) Risk/reward is unfavorable, (4) Signal is just analysis without entry/target/stop, (5) Confidence is too low. ALWAYS call this tool when you decide not to trade - do not just output JSON.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "reason": {
+                                "type": "string",
+                                "description": "Clear reason for skipping (e.g., 'No actionable trade signal - analysis only', 'Market closed', 'R:R below 1.5')",
+                            },
+                            "category": {
+                                "type": "string",
+                                "enum": ["no_signal", "market_closed", "bad_rr", "low_confidence", "timing", "position_exists", "other"],
+                                "description": "Category of skip reason for analytics",
+                            },
+                        },
+                        "required": ["reason", "category"],
+                    },
+                },
+            },
         ]
 
     def get_handlers(self) -> Dict[str, callable]:
         """Get tool handler functions."""
         return {
             "place_bracket_order": self.place_bracket_order,
+            "skip_signal": self.skip_signal,
+        }
+
+    def skip_signal(self, reason: str, category: str) -> Dict[str, Any]:
+        """Skip the signal - explicit tool call for AI to indicate no trade.
+        
+        This provides a clean way for AI to skip signals instead of outputting JSON directly.
+        """
+        return {
+            "action": "skip",
+            "reason": reason,
+            "category": category,
+            "timestamp": datetime.now().isoformat(),
         }
 
     def _get_conid(self, symbol: str) -> Optional[str]:

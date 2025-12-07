@@ -132,13 +132,6 @@ class TradingService:
         if trading_config.emergency_stop:
             return "Emergency stop is active"
 
-        # Check for Katy AI signals that didn't generate a trade
-        content = signal.get_full_content() or ""
-        if "No trade signal generated" in content:
-            return "Katy AI: No trade signal generated"
-        if "insufficient confidence" in content.lower():
-            return "Katy AI: Insufficient confidence for trade"
-
         # Get ticker (try parsed, then raw)
         ticker = signal.ticker
         if not ticker and signal.tickers_raw:
@@ -288,6 +281,36 @@ class TradingService:
                                 "success": True,
                             }
                             logger.debug(f"Tool {func_name} -> OK")
+                            
+                            # If skip_signal tool was called, return immediately with decision
+                            if func_name == "skip_signal":
+                                logger.info(f"   ⏭️ AI called skip_signal: {tool_result.get('reason', 'No reason')}")
+                                return AIResponse(
+                                    decision=TradeDecision(
+                                        action=TradeAction.SKIP,
+                                        reasoning=tool_result.get("reason", "AI decided to skip"),
+                                        skip_reason=tool_result.get("category", "other"),
+                                    ),
+                                    raw_response=json.dumps(tool_result),
+                                    model_used=response.get("model", ""),
+                                )
+                            
+                            # If place_bracket_order tool was called, return with execute decision
+                            if func_name == "place_bracket_order":
+                                logger.info(f"   💰 AI called place_bracket_order")
+                                return AIResponse(
+                                    decision=TradeDecision(
+                                        action=TradeAction.EXECUTE,
+                                        reasoning="AI placed bracket order",
+                                        confidence=0.8,
+                                        modified_entry=args.get("entry_price"),
+                                        modified_target=args.get("take_profit"),
+                                        modified_stop_loss=args.get("stop_loss"),
+                                        modified_size=args.get("quantity"),
+                                    ),
+                                    raw_response=json.dumps(tool_result),
+                                    model_used=response.get("model", ""),
+                                )
                         except Exception as e:
                             result = {
                                 "call_id": call["id"],
