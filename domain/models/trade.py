@@ -108,6 +108,7 @@ class TradeResult:
     fill_price: Optional[float] = None
     filled_quantity: Optional[int] = None
     simulated: bool = False  # True if dry run (execute_orders=False)
+    trade_id: Optional[str] = None  # MongoDB trade document ID for P&L tracking
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
@@ -119,6 +120,7 @@ class TradeResult:
             "fill_price": self.fill_price,
             "filled_quantity": self.filled_quantity,
             "simulated": self.simulated,
+            "trade_id": self.trade_id,
             "timestamp": self.timestamp,
         }
 

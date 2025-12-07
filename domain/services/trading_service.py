@@ -12,6 +12,7 @@ from config.redis_config import trading_config
 from domain.models.signal import Signal
 from domain.models.trade import TradeAction, TradeDecision, AIResponse, TradeResult
 from infrastructure.storage.mongo import MongoHandler
+from infrastructure.storage.trades_repository import trades_repo
 from infrastructure.broker.ibkr_client import IBKRBroker
 from infrastructure.broker.market_data import MarketDataProvider
 from infrastructure.ai.llm_client import LLMClient
@@ -613,13 +614,34 @@ class TradingService:
         if not all([signal.ticker, entry, target, stop_loss]):
             return TradeResult(success=False, error="Missing required trade parameters")
 
+        # Prepare trade data for P&L tracking
+        trade_data = {
+            "thread_id": signal.thread_id,
+            "ticker": signal.ticker,
+            "direction": signal.direction,
+            "entry_price": entry,
+            "quantity": quantity,
+            "take_profit": target,
+            "stop_loss": stop_loss,
+            "model_used": ai_response.model_used,
+            "confidence": decision.confidence,
+            "reasoning": decision.reasoning[:500] if decision.reasoning else None,
+        }
+
         # Dry run mode
         if not trading_config.execute_orders:
             logger.info(f"[DRY RUN] {signal.ticker} @ ${entry} | TP: ${target} | SL: ${stop_loss} | Qty: {quantity}")
+            
+            # Save simulated trade for tracking
+            trade_data["order_id"] = "DRY_RUN_SIMULATED"
+            trade_data["simulated"] = True
+            trade_id = trades_repo.save_trade(trade_data)
+            
             return TradeResult(
                 success=True,
                 order_id="DRY_RUN_SIMULATED",
                 simulated=True,
+                trade_id=trade_id,
             )
 
         # Live execution
@@ -634,10 +656,18 @@ class TradingService:
             )
 
             if result.get("success"):
+                order_id = str(result.get("order", {}).get("order_id", ""))
                 logger.info(f"Trade executed: {signal.ticker} @ ${entry}")
+                
+                # Save trade to P&L tracking
+                trade_data["order_id"] = order_id
+                trade_data["conid"] = result.get("order", {}).get("conid")
+                trade_id = trades_repo.save_trade(trade_data)
+                
                 return TradeResult(
                     success=True,
-                    order_id=str(result.get("order", {}).get("order_id", "")),
+                    order_id=order_id,
+                    trade_id=trade_id,
                 )
             else:
                 return TradeResult(success=False, error=result.get("error", "Unknown error"))
