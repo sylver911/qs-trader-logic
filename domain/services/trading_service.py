@@ -484,7 +484,18 @@ class TradingService:
         )
 
     def _parse_decision(self, content: str) -> TradeDecision:
-        """Parse AI decision from response."""
+        """Parse AI decision from response.
+        
+        Handles both JSON format and plain text responses.
+        """
+        if not content:
+            return TradeDecision(
+                action=TradeAction.SKIP,
+                reasoning="No AI response content",
+                skip_reason="Empty response",
+            )
+        
+        # First try to find JSON in the response
         try:
             start = content.find("{")
             end = content.rfind("}") + 1
@@ -510,12 +521,42 @@ class TradingService:
                     skip_reason=data.get("reasoning") if action == TradeAction.SKIP else None,
                 )
         except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Failed to parse AI response: {e}")
-
+            logger.warning(f"JSON parse failed, trying text parsing: {e}")
+        
+        # Fallback: parse from plain text
+        content_lower = content.lower()
+        
+        # Check for skip indicators
+        skip_indicators = ["market is closed", "market closed", "weekend", "skip", "cannot trade", "should not trade", "do not trade"]
+        for indicator in skip_indicators:
+            if indicator in content_lower:
+                # Extract reasoning from the content (first 200 chars)
+                reasoning = content[:200].strip()
+                if len(content) > 200:
+                    reasoning += "..."
+                return TradeDecision(
+                    action=TradeAction.SKIP,
+                    reasoning=reasoning,
+                    skip_reason="Market hours" if "market" in content_lower or "weekend" in content_lower else "AI decision",
+                )
+        
+        # Check for execute indicators
+        execute_indicators = ["execute", "place order", "buy", "recommend trading"]
+        for indicator in execute_indicators:
+            if indicator in content_lower:
+                logger.warning(f"AI wants to execute but no JSON format - treating as skip for safety")
+                return TradeDecision(
+                    action=TradeAction.SKIP,
+                    reasoning=f"AI suggested trade but response format invalid: {content[:100]}",
+                    skip_reason="Format error",
+                )
+        
+        # Default: skip with the content as reasoning
+        logger.warning(f"Could not parse AI response format, defaulting to skip")
         return TradeDecision(
             action=TradeAction.SKIP,
-            reasoning="Failed to parse AI response",
-            skip_reason="Parse error",
+            reasoning=content[:200] if content else "Unknown AI response",
+            skip_reason="Parse fallback",
         )
 
     def _execute_trade(self, signal: Signal, ai_response: AIResponse) -> TradeResult:
