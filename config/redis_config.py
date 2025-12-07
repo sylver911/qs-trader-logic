@@ -156,23 +156,7 @@ class TradingConfig:
 
     @property
     def current_llm_model(self) -> str:
-        model = self._get_value("current_llm_model", str)
-        # Fix legacy model names without provider prefix
-        if model and '/' not in model:
-            # Map old names to new format
-            model_fixes = {
-                'deepseek-reasoner': 'deepseek/deepseek-reasoner',
-                'deepseek-chat': 'deepseek/deepseek-chat',
-                'gpt-4o': 'openai/gpt-4o',
-                'gpt-4': 'openai/gpt-4',
-                'claude-sonnet': 'anthropic/claude-sonnet-4-20250514',
-            }
-            fixed_model = model_fixes.get(model, f'deepseek/{model}')
-            logger.info(f"Fixed legacy model name: {model} -> {fixed_model}")
-            # Update Redis with fixed value
-            self._set_value("current_llm_model", fixed_model)
-            return fixed_model
-        return model
+        return self._get_value("current_llm_model", str)
 
     @property
     def execute_orders(self) -> bool:

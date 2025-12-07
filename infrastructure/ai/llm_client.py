@@ -125,8 +125,12 @@ Only use schedule_reanalysis again if absolutely necessary (max {scheduled_conte
         logger.debug(f"Prompt length: {len(prompt)} chars")
 
         try:
+            # When using LiteLLM proxy, prefix with openai/ so litellm library 
+            # routes to the proxy instead of trying to parse the model name
+            proxy_model = f"openai/{model}" if '/' not in model else model
+            
             response = completion(
-                model=model,
+                model=proxy_model,
                 messages=[
                     {"role": "system", "content": self._get_system_prompt()},
                     {"role": "user", "content": prompt},
@@ -254,8 +258,12 @@ Only use schedule_reanalysis again if absolutely necessary (max {scheduled_conte
                 logger.debug(f"  Message {i}: role={role}")
 
         try:
+            # When using LiteLLM proxy, prefix with openai/ so litellm library
+            # routes to the proxy instead of trying to parse the model name
+            proxy_model = f"openai/{model}" if '/' not in model else model
+            
             response = completion(
-                model=model,
+                model=proxy_model,
                 messages=messages,
                 api_base=self._api_base,
                 api_key=self._api_key or "dummy",
