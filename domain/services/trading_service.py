@@ -109,8 +109,8 @@ class TradingService:
                 logger.info("=" * 50)
                 return True
 
-            # Execute if AI decided to
-            if ai_response.decision.action == TradeAction.EXECUTE:
+            # Execute if AI decided to (and hasn't already executed via tool call)
+            if ai_response.decision.action == TradeAction.EXECUTE and ai_response.trade_result is None:
                 logger.info("💰 Executing trade...")
                 trade_result = self._execute_trade(signal, ai_response)
                 ai_response.trade_result = trade_result
@@ -118,6 +118,13 @@ class TradingService:
                     logger.info(f"   ✅ Trade executed: {trade_result.order_id}")
                 else:
                     logger.error(f"   ❌ Trade failed: {trade_result.error}")
+            elif ai_response.decision.action == TradeAction.EXECUTE and ai_response.trade_result is not None:
+                # Trade was already executed via tool call
+                trade_result = ai_response.trade_result
+                if trade_result.success:
+                    logger.info(f"   ✅ Trade executed (via tool): {trade_result.order_id}")
+                else:
+                    logger.error(f"   ❌ Trade failed (via tool): {trade_result.error}")
 
             self._save_result(signal, ai_response)
 
@@ -388,10 +395,36 @@ class TradingService:
                             # If place_bracket_order tool was called, return with execute decision
                             if func_name == "place_bracket_order":
                                 logger.info(f"   💰 AI called place_bracket_order")
+                                
+                                # Create trade result from tool execution
+                                trade_result = TradeResult(
+                                    success=tool_result.get("success", False),
+                                    order_id=str(tool_result.get("order", {}).get("order_id", "")) if tool_result.get("order") else None,
+                                    error=tool_result.get("error"),
+                                )
+                                
+                                # Save trade to P&L tracking if successful
+                                trade_id = None
+                                if trade_result.success and trading_config.execute_orders:
+                                    trade_data = {
+                                        "thread_id": signal.thread_id,
+                                        "ticker": args.get("symbol"),  # Use the actual option symbol from AI
+                                        "direction": args.get("side"),
+                                        "entry_price": args.get("entry_price"),
+                                        "quantity": args.get("quantity"),
+                                        "take_profit": args.get("take_profit"),
+                                        "stop_loss": args.get("stop_loss"),
+                                        "order_id": trade_result.order_id,
+                                        "conid": tool_result.get("conid"),
+                                        "model_used": response.get("model", ""),
+                                    }
+                                    trade_id = trades_repo.save_trade(trade_data)
+                                    trade_result.trade_id = trade_id
+                                
                                 return AIResponse(
                                     decision=TradeDecision(
                                         action=TradeAction.EXECUTE,
-                                        reasoning="AI placed bracket order",
+                                        reasoning="AI placed bracket order via tool call",
                                         confidence=0.8,
                                         modified_entry=args.get("entry_price"),
                                         modified_target=args.get("take_profit"),
@@ -401,6 +434,7 @@ class TradingService:
                                     raw_response=json.dumps(tool_result),
                                     model_used=response.get("model", ""),
                                     trace_id=last_request_id,
+                                    trade_result=trade_result,  # Include trade result - prevents double execution
                                 )
                         except Exception as e:
                             result = {
