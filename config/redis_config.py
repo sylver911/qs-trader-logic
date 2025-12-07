@@ -12,27 +12,28 @@ logger = logging.getLogger(__name__)
 
 
 class TradingConfig:
-    """Trading parameters stored in Redis with defaults."""
+    """Trading parameters stored in Redis with defaults.
+    
+    Only includes configs that are actually used in the trading pipeline.
+    """
 
-    # Default values
+    # Default values - only configs that are actually used
     DEFAULTS = {
-        "max_loss_per_trade_percent": 0.1,
-        "max_daily_trades": 10,
-        "max_concurrent_positions": 5,
-        "max_loss_per_day_percent": 0.1,
-        "default_stop_loss_percent": 0.3,
-        "default_take_profit_percent": 0.5,
-        "trailing_stop_enabled": False,
-        "trailing_stop_activation_percent": 0.2,
-        "trailing_stop_distance_percent": 0.1,
-        "min_ai_confidence_score": 0.5,
-        "blacklist_tickers": ["GME", "BYND"],
-        "whitelist_tickers": ["SPY", "QQQ"],
-        "max_position_size_percent": 0.2,
-        "emergency_stop": False,
-        "max_vix_level": 25,
+        # Core trading controls
+        "emergency_stop": False,  # Kill switch for all trading
+        "execute_orders": False,  # False = dry run (simulated), True = live orders
+        
+        # Risk filters (used in _validate_preconditions)
+        "max_concurrent_positions": 5,  # Max open positions
+        "max_vix_level": 25,  # Block trading if VIX too high
+        "min_ai_confidence_score": 0.5,  # Minimum signal confidence (0-1)
+        
+        # Ticker filters
+        "whitelist_tickers": ["SPY", "QQQ"],  # Only trade these (empty = all allowed)
+        "blacklist_tickers": [],  # Never trade these
+        
+        # AI model
         "current_llm_model": "deepseek/deepseek-reasoner",
-        "execute_orders": False,  # If False, simulates orders without sending to IBeam
     }
 
     def __init__(self, redis_url: str = None):
@@ -93,77 +94,41 @@ class TradingConfig:
         else:
             return raw_value
 
-    # Getters for all config values
-    @property
-    def max_loss_per_trade_percent(self) -> float:
-        return self._get_value("max_loss_per_trade_percent", float)
-
-    @property
-    def max_daily_trades(self) -> int:
-        return self._get_value("max_daily_trades", int)
-
-    @property
-    def max_concurrent_positions(self) -> int:
-        return self._get_value("max_concurrent_positions", int)
-
-    @property
-    def max_loss_per_day_percent(self) -> float:
-        return self._get_value("max_loss_per_day_percent", float)
-
-    @property
-    def default_stop_loss_percent(self) -> float:
-        return self._get_value("default_stop_loss_percent", float)
-
-    @property
-    def default_take_profit_percent(self) -> float:
-        return self._get_value("default_take_profit_percent", float)
-
-    @property
-    def trailing_stop_enabled(self) -> bool:
-        return self._get_value("trailing_stop_enabled", bool)
-
-    @property
-    def trailing_stop_activation_percent(self) -> float:
-        return self._get_value("trailing_stop_activation_percent", float)
-
-    @property
-    def trailing_stop_distance_percent(self) -> float:
-        return self._get_value("trailing_stop_distance_percent", float)
-
-    @property
-    def min_ai_confidence_score(self) -> float:
-        return self._get_value("min_ai_confidence_score", float)
-
-    @property
-    def blacklist_tickers(self) -> List[str]:
-        return self._get_value("blacklist_tickers", list)
-
-    @property
-    def whitelist_tickers(self) -> List[str]:
-        return self._get_value("whitelist_tickers", list)
-
-    @property
-    def max_position_size_percent(self) -> float:
-        return self._get_value("max_position_size_percent", float)
-
+    # Getters - only for configs that are actually used
     @property
     def emergency_stop(self) -> bool:
         return self._get_value("emergency_stop", bool)
-
-    @property
-    def max_vix_level(self) -> float:
-        return self._get_value("max_vix_level", float)
-
-    @property
-    def current_llm_model(self) -> str:
-        return self._get_value("current_llm_model", str)
 
     @property
     def execute_orders(self) -> bool:
         """If False, simulates orders without sending to IBeam (dry run mode)."""
         return self._get_value("execute_orders", bool)
 
-    # Setters for dynamic updates (Discord bot will use these)
+    @property
+    def max_concurrent_positions(self) -> int:
+        return self._get_value("max_concurrent_positions", int)
+
+    @property
+    def max_vix_level(self) -> float:
+        return self._get_value("max_vix_level", float)
+
+    @property
+    def min_ai_confidence_score(self) -> float:
+        return self._get_value("min_ai_confidence_score", float)
+
+    @property
+    def whitelist_tickers(self) -> List[str]:
+        return self._get_value("whitelist_tickers", list)
+
+    @property
+    def blacklist_tickers(self) -> List[str]:
+        return self._get_value("blacklist_tickers", list)
+
+    @property
+    def current_llm_model(self) -> str:
+        return self._get_value("current_llm_model", str)
+
+    # Setter for dynamic updates
     def set(self, key: str, value: Any) -> bool:
         """Set a config value.
 
@@ -185,23 +150,14 @@ class TradingConfig:
     def get_all(self) -> Dict[str, Any]:
         """Get all config values."""
         return {
-            "max_loss_per_trade_percent": self.max_loss_per_trade_percent,
-            "max_daily_trades": self.max_daily_trades,
-            "max_concurrent_positions": self.max_concurrent_positions,
-            "max_loss_per_day_percent": self.max_loss_per_day_percent,
-            "default_stop_loss_percent": self.default_stop_loss_percent,
-            "default_take_profit_percent": self.default_take_profit_percent,
-            "trailing_stop_enabled": self.trailing_stop_enabled,
-            "trailing_stop_activation_percent": self.trailing_stop_activation_percent,
-            "trailing_stop_distance_percent": self.trailing_stop_distance_percent,
-            "min_ai_confidence_score": self.min_ai_confidence_score,
-            "blacklist_tickers": self.blacklist_tickers,
-            "whitelist_tickers": self.whitelist_tickers,
-            "max_position_size_percent": self.max_position_size_percent,
             "emergency_stop": self.emergency_stop,
-            "max_vix_level": self.max_vix_level,
-            "current_llm_model": self.current_llm_model,
             "execute_orders": self.execute_orders,
+            "max_concurrent_positions": self.max_concurrent_positions,
+            "max_vix_level": self.max_vix_level,
+            "min_ai_confidence_score": self.min_ai_confidence_score,
+            "whitelist_tickers": self.whitelist_tickers,
+            "blacklist_tickers": self.blacklist_tickers,
+            "current_llm_model": self.current_llm_model,
         }
 
     def close(self) -> None:
