@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from jinja2 import Environment, FileSystemLoader, BaseLoader
-from litellm import completion
+from openai import OpenAI
 
 from config.settings import config
 from config.redis_config import trading_config
@@ -125,19 +125,19 @@ Only use schedule_reanalysis again if absolutely necessary (max {scheduled_conte
         logger.debug(f"Prompt length: {len(prompt)} chars")
 
         try:
-            # When using LiteLLM proxy, prefix with openai/ so litellm library 
-            # routes to the proxy instead of trying to parse the model name
-            proxy_model = f"openai/{model}" if '/' not in model else model
+            # Use OpenAI client directly - works with any OpenAI-compatible API (like LiteLLM proxy)
+            client = OpenAI(
+                base_url=self._api_base,
+                api_key=self._api_key or "dummy",
+            )
             
-            response = completion(
-                model=proxy_model,
+            response = client.chat.completions.create(
+                model=model,  # Send model name as-is, proxy handles routing
                 messages=[
                     {"role": "system", "content": self._get_system_prompt()},
                     {"role": "user", "content": prompt},
                 ],
-                api_base=self._api_base,
-                api_key=self._api_key or "dummy",
-                tools=tools,
+                tools=tools if tools else None,
                 tool_choice="auto" if tools else None,
                 temperature=0.3,
                 max_tokens=2000,
@@ -258,16 +258,16 @@ Only use schedule_reanalysis again if absolutely necessary (max {scheduled_conte
                 logger.debug(f"  Message {i}: role={role}")
 
         try:
-            # When using LiteLLM proxy, prefix with openai/ so litellm library
-            # routes to the proxy instead of trying to parse the model name
-            proxy_model = f"openai/{model}" if '/' not in model else model
-            
-            response = completion(
-                model=proxy_model,
-                messages=messages,
-                api_base=self._api_base,
+            # Use OpenAI client directly - works with any OpenAI-compatible API (like LiteLLM proxy)
+            client = OpenAI(
+                base_url=self._api_base,
                 api_key=self._api_key or "dummy",
-                tools=tools,
+            )
+            
+            response = client.chat.completions.create(
+                model=model,  # Send model name as-is, proxy handles routing
+                messages=messages,
+                tools=tools if tools else None,
                 tool_choice="auto" if tools else None,
                 temperature=0.3,
                 max_tokens=2000,
