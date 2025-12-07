@@ -132,6 +132,13 @@ class TradingService:
         if trading_config.emergency_stop:
             return "Emergency stop is active"
 
+        # Check for Katy AI signals that didn't generate a trade
+        content = signal.get_full_content() or ""
+        if "No trade signal generated" in content:
+            return "Katy AI: No trade signal generated"
+        if "insufficient confidence" in content.lower():
+            return "Katy AI: Insufficient confidence for trade"
+
         # Get ticker (try parsed, then raw)
         ticker = signal.ticker
         if not ticker and signal.tickers_raw:
