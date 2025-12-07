@@ -39,7 +39,7 @@ class ScheduleTools:
                 "type": "function",
                 "function": {
                     "name": "schedule_reanalysis",
-                    "description": """Schedule this signal for reanalysis at a later time. 
+                    "description": """Schedule this signal for reanalysis after a delay (in minutes).
                     
 USE THIS WHEN:
 - Signal mentions waiting for specific event (PCE, FOMC, CPI, jobs report, etc.)
@@ -52,18 +52,18 @@ DO NOT USE WHEN:
 - Signal is already stale or expired
 - You've already reanalyzed this signal twice (check retry_count)
 
-The signal will be automatically reanalyzed at the specified time with fresh market data.
+The signal will be automatically reanalyzed after the specified delay with fresh market data.
 You will receive the previous analysis context when reanalyzing.""",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "reanalyze_at": {
-                                "type": "string",
-                                "description": "ISO timestamp when to reanalyze (e.g., '2024-12-06T10:05:00'). Must be 5-240 minutes from now."
+                            "delay_minutes": {
+                                "type": "integer",
+                                "description": "Minutes to wait before reanalysis. Must be between 5 and 240 (4 hours). Examples: 15 (quarter hour), 30 (half hour), 60 (one hour), 120 (two hours)."
                             },
                             "reason": {
                                 "type": "string",
-                                "description": "Why scheduling delay (e.g., 'Waiting for PCE data release at 10:00 AM')"
+                                "description": "Why scheduling delay (e.g., 'Waiting for PCE data release', 'Wait for market to settle after open')"
                             },
                             "question": {
                                 "type": "string",
@@ -80,7 +80,7 @@ You will receive the previous analysis context when reanalyzing.""",
                                 }
                             }
                         },
-                        "required": ["reanalyze_at", "reason", "question"]
+                        "required": ["delay_minutes", "reason", "question"]
                     }
                 }
             }
@@ -94,7 +94,7 @@ You will receive the previous analysis context when reanalyzing.""",
     
     def schedule_reanalysis(
         self,
-        reanalyze_at: str,
+        delay_minutes: int,
         reason: str,
         question: str,
         key_levels: Dict[str, float] = None,
@@ -108,7 +108,7 @@ You will receive the previous analysis context when reanalyzing.""",
         """Schedule signal for delayed reanalysis.
         
         Args:
-            reanalyze_at: ISO timestamp when to reanalyze
+            delay_minutes: Minutes to wait before reanalysis (5-240)
             reason: Why scheduling delay
             question: Question to answer on reanalysis
             key_levels: Key price levels to check
@@ -132,30 +132,28 @@ You will receive the previous analysis context when reanalyzing.""",
                 "force_decision": True
             }
         
-        # Parse and validate reanalyze_at
+        # Validate delay_minutes type
         try:
-            reanalyze_time = datetime.fromisoformat(reanalyze_at.replace('Z', '+00:00'))
-            # Remove timezone for comparison if naive
-            if reanalyze_time.tzinfo:
-                reanalyze_time = reanalyze_time.replace(tzinfo=None)
-        except ValueError as e:
-            return {"success": False, "error": f"Invalid timestamp format: {e}"}
-        
-        now = datetime.now()
-        delay_minutes = (reanalyze_time - now).total_seconds() / 60
+            delay_minutes = int(delay_minutes)
+        except (TypeError, ValueError):
+            return {"success": False, "error": f"delay_minutes must be an integer, got: {delay_minutes}"}
         
         # Validate delay bounds
         if delay_minutes < self.MIN_DELAY_MINUTES:
             return {
                 "success": False,
-                "error": f"Delay too short ({delay_minutes:.0f} min). Minimum is {self.MIN_DELAY_MINUTES} minutes. Decide now or pick a later time."
+                "error": f"Delay too short ({delay_minutes} min). Minimum is {self.MIN_DELAY_MINUTES} minutes. Decide now or pick a longer delay."
             }
         
         if delay_minutes > self.MAX_DELAY_MINUTES:
             return {
                 "success": False,
-                "error": f"Delay too long ({delay_minutes:.0f} min). Maximum is {self.MAX_DELAY_MINUTES} minutes ({self.MAX_DELAY_MINUTES/60:.0f} hours). Consider SKIP instead."
+                "error": f"Delay too long ({delay_minutes} min). Maximum is {self.MAX_DELAY_MINUTES} minutes ({self.MAX_DELAY_MINUTES//60} hours). Consider SKIP instead."
             }
+        
+        # Calculate reanalyze time from delay
+        now = datetime.now()
+        reanalyze_time = now + timedelta(minutes=delay_minutes)
         
         # Build scheduled data
         scheduled_data = {
@@ -163,6 +161,7 @@ You will receive the previous analysis context when reanalyzing.""",
             "thread_name": _thread_name or "Unknown",
             "scheduled_at": now.isoformat(),
             "reanalyze_at": reanalyze_time.isoformat(),
+            "delay_minutes": delay_minutes,
             "retry_count": _retry_count + 1,
             "max_retries": self.MAX_RETRIES,
             
@@ -200,17 +199,17 @@ You will receive the previous analysis context when reanalyzing.""",
             # Add to sorted set for polling
             self._redis.zadd("queue:scheduled", {_thread_id: score})
             
-            logger.info(f"Scheduled reanalysis for {_thread_id} at {reanalyze_time} (in {delay_minutes:.0f} min)")
+            logger.info(f"Scheduled reanalysis for {_thread_id} in {delay_minutes} min (at {reanalyze_time.strftime('%H:%M')})")
             
             return {
                 "success": True,
                 "scheduled": True,
+                "delay_minutes": delay_minutes,
                 "reanalyze_at": reanalyze_time.isoformat(),
-                "delay_minutes": int(delay_minutes),
                 "reason": reason,
                 "question": question,
                 "retry_count": _retry_count + 1,
-                "message": f"Signal scheduled for reanalysis in {int(delay_minutes)} minutes. Will check: {question}"
+                "message": f"Signal scheduled for reanalysis in {delay_minutes} minutes. Will check: {question}"
             }
             
         except Exception as e:
@@ -254,6 +253,9 @@ You will receive the previous analysis context when reanalyzing.""",
                 if data:
                     item = json.loads(data)
                     item["reanalyze_timestamp"] = score
+                    # Calculate remaining minutes
+                    remaining = (score - datetime.now().timestamp()) / 60
+                    item["remaining_minutes"] = max(0, int(remaining))
                     result.append(item)
                 else:
                     # Data expired but still in set - clean up
