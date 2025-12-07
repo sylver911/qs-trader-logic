@@ -359,7 +359,6 @@ class TradingService:
                             
                             # If skip_signal tool was called, return immediately with decision
                             if func_name == "skip_signal":
-                            if func_name == "skip_signal":
                                 logger.info(f"   ⏭️ AI called skip_signal: {tool_result.get('reason', 'No reason')}")
                                 return AIResponse(
                                     decision=TradeDecision(
