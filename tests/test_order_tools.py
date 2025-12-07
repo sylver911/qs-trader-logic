@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from tools.order_tools import OrderTools
 
@@ -15,12 +15,15 @@ class TestOrderTools:
         tools = OrderTools.get_tool_definitions()
         
         assert isinstance(tools, list)
-        assert len(tools) == 1  # Only bracket order
+        assert len(tools) == 2  # bracket order + skip_signal
         
-        tool_def = tools[0]
-        assert tool_def["function"]["name"] == "place_bracket_order"
+        tool_names = {t["function"]["name"] for t in tools}
+        assert "place_bracket_order" in tool_names
+        assert "skip_signal" in tool_names
         
-        params = tool_def["function"]["parameters"]["properties"]
+        # Check bracket order params
+        bracket_tool = next(t for t in tools if t["function"]["name"] == "place_bracket_order")
+        params = bracket_tool["function"]["parameters"]["properties"]
         assert "symbol" in params
         assert "side" in params
         assert "quantity" in params
@@ -35,10 +38,112 @@ class TestOrderTools:
         handlers = tools.get_handlers()
         
         assert "place_bracket_order" in handlers
+        assert "skip_signal" in handlers
         assert callable(handlers["place_bracket_order"])
+        assert callable(handlers["skip_signal"])
 
-    def test_place_bracket_order_success(self):
-        """Successful bracket order placement."""
+    def test_skip_signal(self):
+        """Skip signal should return proper structure."""
+        mock_broker = MagicMock()
+        tools = OrderTools(broker=mock_broker)
+        
+        result = tools.skip_signal(
+            reason="Market is closed",
+            category="market_closed"
+        )
+        
+        assert result["action"] == "skip"
+        assert result["reason"] == "Market is closed"
+        assert result["category"] == "market_closed"
+        assert "timestamp" in result
+
+
+class TestOptionSymbolParsing:
+    """Test option symbol parsing."""
+    
+    def test_parse_spy_call(self):
+        """Parse SPY call option."""
+        tools = OrderTools(broker=MagicMock())
+        
+        result = tools._parse_option_symbol("SPY 241209C00605000")
+        
+        assert result is not None
+        assert result["ticker"] == "SPY"
+        assert result["expiry_month"] == "DEC24"
+        assert result["strike"] == 605.0
+        assert result["right"] == "C"
+    
+    def test_parse_spy_put(self):
+        """Parse SPY put option."""
+        tools = OrderTools(broker=MagicMock())
+        
+        result = tools._parse_option_symbol("SPY 241209P00600000")
+        
+        assert result is not None
+        assert result["ticker"] == "SPY"
+        assert result["expiry_month"] == "DEC24"
+        assert result["strike"] == 600.0
+        assert result["right"] == "P"
+    
+    def test_parse_no_space(self):
+        """Parse symbol without space."""
+        tools = OrderTools(broker=MagicMock())
+        
+        result = tools._parse_option_symbol("SPY241209C00605000")
+        
+        assert result is not None
+        assert result["ticker"] == "SPY"
+        assert result["strike"] == 605.0
+    
+    def test_parse_fractional_strike(self):
+        """Parse option with fractional strike."""
+        tools = OrderTools(broker=MagicMock())
+        
+        # Strike 605.50 = 00605500
+        result = tools._parse_option_symbol("SPY 241209C00605500")
+        
+        assert result is not None
+        assert result["strike"] == 605.5
+    
+    def test_parse_tsla_option(self):
+        """Parse TSLA option."""
+        tools = OrderTools(broker=MagicMock())
+        
+        result = tools._parse_option_symbol("TSLA 241220C00400000")
+        
+        assert result is not None
+        assert result["ticker"] == "TSLA"
+        assert result["expiry_month"] == "DEC24"
+        assert result["strike"] == 400.0
+        assert result["right"] == "C"
+    
+    def test_parse_qqq_option(self):
+        """Parse QQQ option."""
+        tools = OrderTools(broker=MagicMock())
+        
+        result = tools._parse_option_symbol("QQQ 250117P00500000")
+        
+        assert result is not None
+        assert result["ticker"] == "QQQ"
+        assert result["expiry_month"] == "JAN25"
+        assert result["strike"] == 500.0
+        assert result["right"] == "P"
+    
+    def test_parse_invalid_symbol(self):
+        """Invalid symbols should return None."""
+        tools = OrderTools(broker=MagicMock())
+        
+        # Invalid formats
+        assert tools._parse_option_symbol("SPY") is None
+        assert tools._parse_option_symbol("INVALID") is None
+        assert tools._parse_option_symbol("SPY 241209X00605000") is None  # Invalid right
+
+
+class TestBracketOrderPlacement:
+    """Test bracket order placement."""
+    
+    def test_place_stock_bracket_order_success(self):
+        """Successful stock bracket order placement."""
         mock_broker = MagicMock()
         mock_broker.search_contract.return_value = {"conid": "12345"}
         mock_broker.place_bracket_order.return_value = {"order_id": "ORD123"}
@@ -48,19 +153,46 @@ class TestOrderTools:
             symbol="SPY",
             side="BUY",
             quantity=2,
+            entry_price=605.00,
+            take_profit=610.00,
+            stop_loss=600.00,
+        )
+        
+        assert result["success"] is True
+        assert result["conid"] == "12345"
+        assert result["symbol"] == "SPY"
+        assert result["order_type"] == "BRACKET"
+
+    def test_place_option_bracket_order_success(self):
+        """Successful option bracket order placement."""
+        mock_broker = MagicMock()
+        mock_client = MagicMock()
+        
+        # Mock underlying lookup
+        mock_broker.search_contract.return_value = {"conid": "756733"}  # SPY underlying
+        mock_broker._get_client.return_value = mock_client
+        
+        # Mock option contract lookup
+        mock_client.search_secdef_info_by_conid.return_value = MagicMock(
+            data=[{"conid": "123456789"}]  # Option conid
+        )
+        
+        # Mock order placement
+        mock_broker.place_bracket_order.return_value = {"order_id": "ORD123"}
+        
+        tools = OrderTools(broker=mock_broker)
+        result = tools.place_bracket_order(
+            symbol="SPY 241209C00605000",
+            side="BUY",
+            quantity=2,
             entry_price=1.85,
             take_profit=2.50,
             stop_loss=1.40,
         )
         
         assert result["success"] is True
-        assert result["symbol"] == "SPY"
-        assert result["side"] == "BUY"
-        assert result["quantity"] == 2
-        assert result["entry_price"] == 1.85
-        assert result["take_profit"] == 2.50
-        assert result["stop_loss"] == 1.40
-        assert result["order_type"] == "BRACKET"
+        assert result["conid"] == "123456789"
+        assert "SPY" in result["symbol"]
 
     def test_place_bracket_order_contract_not_found(self):
         """Bracket order fails when contract not found."""
@@ -70,6 +202,24 @@ class TestOrderTools:
         tools = OrderTools(broker=mock_broker)
         result = tools.place_bracket_order(
             symbol="INVALID",
+            side="BUY",
+            quantity=1,
+            entry_price=1.00,
+            take_profit=1.50,
+            stop_loss=0.80,
+        )
+        
+        assert result["success"] is False
+        assert "not found" in result["error"].lower()
+
+    def test_place_bracket_order_option_underlying_not_found(self):
+        """Option order fails when underlying not found."""
+        mock_broker = MagicMock()
+        mock_broker.search_contract.return_value = None
+        
+        tools = OrderTools(broker=mock_broker)
+        result = tools.place_bracket_order(
+            symbol="FAKE 241209C00100000",
             side="BUY",
             quantity=1,
             entry_price=1.00,
@@ -91,9 +241,9 @@ class TestOrderTools:
             symbol="SPY",
             side="BUY",
             quantity=1,
-            entry_price=1.85,
-            take_profit=2.50,
-            stop_loss=1.40,
+            entry_price=605.00,
+            take_profit=610.00,
+            stop_loss=600.00,
         )
         
         assert result["success"] is False

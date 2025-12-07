@@ -4,11 +4,15 @@ Only the essential order tool for QS:
 - place_bracket_order (entry + TP + SL in one)
 """
 
+import re
+import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import time
 
 from infrastructure.broker.ibkr_client import IBKRBroker
+
+logger = logging.getLogger(__name__)
 
 
 class OrderTools:
@@ -35,7 +39,7 @@ class OrderTools:
                         "properties": {
                             "symbol": {
                                 "type": "string",
-                                "description": "Option symbol (e.g., 'SPY 241203C00605000' for SPY Dec 3 $605 Call)",
+                                "description": "Option symbol in format: 'TICKER YYMMDD[C/P]STRIKE' (e.g., 'SPY 241209C00605000' for SPY Dec 9 2024 $605 Call). Strike is in 8 digits with 3 decimal places implied.",
                             },
                             "side": {
                                 "type": "string",
@@ -106,13 +110,147 @@ class OrderTools:
             "timestamp": datetime.now().isoformat(),
         }
 
-    def _get_conid(self, symbol: str) -> Optional[str]:
-        """Get contract ID for a symbol."""
-        # For options, we need to handle the full symbol
-        contract = self._broker.search_contract(symbol.upper())
-        if contract:
-            return str(contract.get("conid"))
-        return None
+    def _parse_option_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Parse OCC option symbol into components.
+        
+        Format: "SPY 241209C00605000" or "SPY241209C00605000"
+        - Ticker: SPY
+        - Date: 241209 (YYMMDD)
+        - Right: C (Call) or P (Put)
+        - Strike: 00605000 (605.000 with 3 implied decimals)
+        
+        Returns:
+            Dict with: ticker, expiry_month, strike, right
+            Or None if parsing fails
+        """
+        # Remove spaces and uppercase
+        symbol = symbol.upper().replace(" ", "")
+        
+        # Match pattern: TICKER + YYMMDD + C/P + 8-digit strike
+        # Ticker can be 1-6 characters
+        pattern = r'^([A-Z]{1,6})(\d{6})([CP])(\d{8})$'
+        match = re.match(pattern, symbol)
+        
+        if not match:
+            logger.warning(f"Could not parse option symbol: {symbol}")
+            return None
+        
+        ticker = match.group(1)
+        date_str = match.group(2)  # YYMMDD
+        right = match.group(3)  # C or P
+        strike_str = match.group(4)  # 8 digits
+        
+        # Convert strike (00605000 -> 605.0)
+        strike = int(strike_str) / 1000.0
+        
+        # Convert date to IBKR month format (YYMMDD -> DECYY format: DEC24)
+        year = date_str[:2]  # "24"
+        month_num = int(date_str[2:4])  # 12
+        
+        month_names = ["", "JAN", "FEB", "MAR", "APR", "MAY", "JUN", 
+                       "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+        month_name = month_names[month_num] if 1 <= month_num <= 12 else None
+        
+        if not month_name:
+            logger.warning(f"Invalid month in symbol: {symbol}")
+            return None
+        
+        expiry_month = f"{month_name}{year}"  # "DEC24"
+        
+        return {
+            "ticker": ticker,
+            "expiry_month": expiry_month,
+            "expiry_date": f"20{date_str}",  # "20241209"
+            "strike": strike,
+            "right": right,
+        }
+
+    def _get_option_conid(self, symbol: str) -> Tuple[Optional[str], Optional[str]]:
+        """Get contract ID for an option symbol.
+        
+        This performs the two-step IBKR lookup:
+        1. Get underlying stock conid
+        2. Use search_secdef_info_by_conid to get the specific option contract
+        
+        Args:
+            symbol: OCC option symbol (e.g., "SPY 241209C00605000")
+            
+        Returns:
+            Tuple of (conid, error_message)
+        """
+        # Parse the option symbol
+        parsed = self._parse_option_symbol(symbol)
+        if not parsed:
+            return None, f"Could not parse option symbol: {symbol}"
+        
+        ticker = parsed["ticker"]
+        expiry_month = parsed["expiry_month"]
+        strike = parsed["strike"]
+        right = parsed["right"]
+        
+        logger.info(f"Looking up option: {ticker} {expiry_month} {strike} {right}")
+        
+        try:
+            # Step 1: Get underlying conid
+            underlying = self._broker.search_contract(ticker, sec_type="STK")
+            if not underlying:
+                return None, f"Underlying {ticker} not found"
+            
+            underlying_conid = str(underlying.get("conid"))
+            logger.debug(f"Underlying {ticker} conid: {underlying_conid}")
+            
+            # Step 2: Get option contract details
+            client = self._broker._get_client()
+            result = client.search_secdef_info_by_conid(
+                conid=underlying_conid,
+                sec_type="OPT",
+                month=expiry_month,
+                strike=str(strike),
+                right=right,
+            )
+            
+            if not result.data:
+                return None, f"Option contract not found: {ticker} {expiry_month} {strike}{right}"
+            
+            # The result should contain the option contract(s)
+            # Look for exact match or first result
+            option_data = result.data
+            if isinstance(option_data, list):
+                if len(option_data) == 0:
+                    return None, f"No option contracts returned for {symbol}"
+                option_data = option_data[0]
+            
+            option_conid = str(option_data.get("conid"))
+            logger.info(f"Option conid found: {option_conid} for {symbol}")
+            
+            return option_conid, None
+            
+        except Exception as e:
+            logger.error(f"Error looking up option conid for {symbol}: {e}")
+            return None, str(e)
+
+    def _get_conid(self, symbol: str) -> Tuple[Optional[str], Optional[str]]:
+        """Get contract ID for a symbol (stock or option).
+        
+        Returns:
+            Tuple of (conid, error_message)
+        """
+        # Check if this looks like an option symbol
+        # Options have format like "SPY 241209C00605000" or contain C/P followed by digits
+        symbol_clean = symbol.upper().replace(" ", "")
+        
+        # Simple heuristic: if it has C or P followed by 8 digits, it's an option
+        if re.search(r'[CP]\d{8}$', symbol_clean):
+            return self._get_option_conid(symbol)
+        
+        # Otherwise treat as stock
+        try:
+            contract = self._broker.search_contract(symbol.upper(), sec_type="STK")
+            if contract:
+                return str(contract.get("conid")), None
+            return None, f"Stock contract not found for {symbol}"
+        except Exception as e:
+            return None, str(e)
 
     def place_bracket_order(
         self,
@@ -130,11 +268,11 @@ class OrderTools:
         2. Take profit order (limit, OCA with stop)
         3. Stop loss order (stop, OCA with TP)
         """
-        conid = self._get_conid(symbol)
+        conid, error = self._get_conid(symbol)
         if not conid:
             return {
                 "success": False,
-                "error": f"Contract not found for {symbol}",
+                "error": error or f"Contract not found for {symbol}",
                 "timestamp": datetime.now().isoformat(),
             }
 
@@ -150,6 +288,7 @@ class OrderTools:
         return {
             "success": result is not None,
             "order": result,
+            "conid": conid,
             "symbol": symbol,
             "side": side,
             "quantity": quantity,
