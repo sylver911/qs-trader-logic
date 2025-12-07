@@ -18,6 +18,7 @@ from infrastructure.ai.llm_client import LLMClient
 from tools.market_tools import MarketTools
 from tools.portfolio_tools import PortfolioTools
 from tools.order_tools import OrderTools
+from tools.schedule_tools import ScheduleTools
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +46,26 @@ class TradingService:
         self._market_tools = MarketTools(self._market_data)
         self._portfolio_tools = PortfolioTools(self._broker)
         self._order_tools = OrderTools(self._broker)
+        self._schedule_tools = ScheduleTools()
 
     def process_signal(self, task: Dict[str, Any]) -> bool:
-        """Process a signal from the queue."""
+        """Process a signal from the queue.
+        
+        Args:
+            task: Queue task containing thread_id and optional scheduled_context
+        """
         thread_id = task.get("thread_id", "")
         thread_name = task.get("thread_name", "")
+        scheduled_context = task.get("scheduled_context")  # Present if this is a reanalysis
 
         logger.info("=" * 50)
-        logger.info(f"📥 SIGNAL RECEIVED: {thread_name}")
+        if scheduled_context:
+            retry_count = scheduled_context.get("retry_count", 1)
+            logger.info(f"🔄 SCHEDULED REANALYSIS #{retry_count}: {thread_name}")
+            logger.info(f"   Reason: {scheduled_context.get('delay_reason', 'N/A')}")
+            logger.info(f"   Question: {scheduled_context.get('delay_question', 'N/A')}")
+        else:
+            logger.info(f"📥 SIGNAL RECEIVED: {thread_name}")
         logger.info(f"   Thread ID: {thread_id}")
 
         try:
@@ -86,7 +99,14 @@ class TradingService:
 
             # Let AI analyze and decide
             logger.info("🤖 Starting AI analysis...")
-            ai_response = self._analyze_with_ai(signal, market_data, portfolio_data)
+            ai_response = self._analyze_with_ai(signal, market_data, portfolio_data, scheduled_context)
+
+            # Check for DELAY decision
+            if ai_response.decision.action == TradeAction.DELAY:
+                logger.info(f"⏰ DECISION: DELAY | {ai_response.decision.reasoning}")
+                self._save_delay_result(signal, ai_response)
+                logger.info("=" * 50)
+                return True
 
             # Execute if AI decided to
             if ai_response.decision.action == TradeAction.EXECUTE:
@@ -199,23 +219,36 @@ class TradingService:
         signal: Signal,
         market_data: Dict[str, Any],
         portfolio_data: Dict[str, Any],
+        scheduled_context: Dict[str, Any] = None,
     ) -> AIResponse:
-        """Analyze signal with AI using iterative tool calling."""
+        """Analyze signal with AI using iterative tool calling.
         
-        # Combine all tools
+        Args:
+            signal: The trading signal
+            market_data: Current market data
+            portfolio_data: Portfolio information
+            scheduled_context: Context from previous analysis if this is a reanalysis
+        """
+        
+        # Combine all tools (including schedule_reanalysis)
         tools = (
             MarketTools.get_tool_definitions()
             + PortfolioTools.get_tool_definitions()
             + OrderTools.get_tool_definitions()
+            + ScheduleTools.get_tool_definitions()
         )
 
         handlers = {
             **self._market_tools.get_handlers(),
             **self._portfolio_tools.get_handlers(),
             **self._order_tools.get_handlers(),
+            **self._schedule_tools.get_handlers(),
         }
 
         trading_params = trading_config.get_all()
+        
+        # Get retry count from scheduled context
+        retry_count = scheduled_context.get("retry_count", 0) if scheduled_context else 0
 
         # Initial call
         response = self._llm.analyze_signal(
@@ -224,10 +257,14 @@ class TradingService:
             portfolio_data=portfolio_data,
             trading_params=trading_params,
             tools=tools,
+            scheduled_context=scheduled_context,  # Pass scheduled context to prompt
         )
         
         # Track request_id for trace linking (use last one from conversation)
         last_request_id = response.get("request_id")
+        
+        # Track tool calls for schedule_reanalysis context
+        all_tool_calls = []
 
         # Build message history
         messages = [
@@ -275,6 +312,14 @@ class TradingService:
                     handler = handlers.get(func_name)
                     if handler:
                         try:
+                            # Special handling for schedule_reanalysis - inject context
+                            if func_name == "schedule_reanalysis":
+                                args["_thread_id"] = signal.thread_id
+                                args["_thread_name"] = signal.thread_name or signal.tickers_raw
+                                args["_previous_tools"] = all_tool_calls
+                                args["_retry_count"] = retry_count
+                                args["_signal_data"] = signal.to_dict()
+                            
                             tool_result = handler(**args)
                             tool_cache[cache_key] = tool_result
                             result = {
@@ -283,9 +328,37 @@ class TradingService:
                                 "result": tool_result,
                                 "success": True,
                             }
+                            
+                            # Track tool calls for context
+                            all_tool_calls.append({
+                                "name": func_name,
+                                "arguments": args,
+                                "result": tool_result,
+                            })
+                            
                             logger.debug(f"Tool {func_name} -> OK")
                             
+                            # If schedule_reanalysis was called successfully, return DELAY
+                            if func_name == "schedule_reanalysis" and tool_result.get("success"):
+                                logger.info(f"   ⏰ AI scheduled reanalysis: {tool_result.get('reason', 'N/A')}")
+                                return AIResponse(
+                                    decision=TradeDecision(
+                                        action=TradeAction.DELAY,
+                                        reasoning=tool_result.get("reason", "Scheduled for reanalysis"),
+                                        skip_reason=None,
+                                    ),
+                                    raw_response=json.dumps(tool_result),
+                                    model_used=response.get("model", ""),
+                                    trace_id=last_request_id,
+                                    delay_info={
+                                        "reanalyze_at": tool_result.get("reanalyze_at"),
+                                        "delay_minutes": tool_result.get("delay_minutes"),
+                                        "question": tool_result.get("question"),
+                                    },
+                                )
+                            
                             # If skip_signal tool was called, return immediately with decision
+                            if func_name == "skip_signal":
                             if func_name == "skip_signal":
                                 logger.info(f"   ⏭️ AI called skip_signal: {tool_result.get('reason', 'No reason')}")
                                 return AIResponse(
@@ -527,3 +600,22 @@ class TradingService:
                     },
                 },
             )
+
+    def _save_delay_result(self, signal: Signal, ai_response: AIResponse) -> None:
+        """Save delay result to MongoDB (signal scheduled for reanalysis)."""
+        with MongoHandler() as mongo:
+            ai_data = ai_response.to_mongo_update()
+            update_data = {
+                "ai_processed": True,  # Marked as processed (but with delay)
+                "ai_processed_at": datetime.now().isoformat(),
+                "ai_result": ai_data,
+                "scheduled_reanalysis": ai_response.delay_info,
+            }
+            if ai_response.trace_id:
+                update_data["trace_id"] = ai_response.trace_id
+            mongo.update_one(
+                config.THREADS_COLLECTION,
+                query={"thread_id": signal.thread_id},
+                update_data=update_data,
+            )
+        logger.debug(f"Saved delay result for {signal.thread_id}")

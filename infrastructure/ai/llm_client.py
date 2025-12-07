@@ -73,8 +73,18 @@ class LLMClient:
         portfolio_data: Dict[str, Any],
         trading_params: Dict[str, Any],
         tools: Optional[List[Dict[str, Any]]] = None,
+        scheduled_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Analyze a trading signal with AI."""
+        """Analyze a trading signal with AI.
+        
+        Args:
+            signal_data: Signal information
+            market_data: Current market data
+            portfolio_data: Portfolio information
+            trading_params: Trading configuration
+            tools: Available tools
+            scheduled_context: Context from previous analysis if this is a reanalysis
+        """
         model = trading_config.current_llm_model
 
         context = {
@@ -85,6 +95,31 @@ class LLMClient:
         }
 
         prompt = self.render_prompt("signal_analysis.j2", context)
+        
+        # Add scheduled context if this is a reanalysis
+        if scheduled_context:
+            reanalysis_context = f"""
+
+---
+## ⚠️ THIS IS A SCHEDULED REANALYSIS (Attempt #{scheduled_context.get('retry_count', 1)})
+
+**Original delay reason:** {scheduled_context.get('delay_reason', 'N/A')}
+
+**Question to answer NOW:** {scheduled_context.get('delay_question', 'N/A')}
+
+**Previous analysis summary:**
+- Tools called: {', '.join(scheduled_context.get('previous_analysis', {}).get('tools_called', []))}
+- Market status was: {scheduled_context.get('previous_analysis', {}).get('tool_results_summary', {}).get('market_status', 'N/A')}
+- Time was: {scheduled_context.get('previous_analysis', {}).get('tool_results_summary', {}).get('time_est', 'N/A')}
+
+**Key levels to check:**
+{json.dumps(scheduled_context.get('key_levels', {}), indent=2) if scheduled_context.get('key_levels') else 'None specified'}
+
+**IMPORTANT:** You have already analyzed this signal once. Now check if the event has occurred and make your final decision: EXECUTE or SKIP. 
+Only use schedule_reanalysis again if absolutely necessary (max {scheduled_context.get('max_retries', 2)} retries total).
+---
+"""
+            prompt = prompt + reanalysis_context
 
         logger.debug(f"Sending prompt to {model}")
         logger.debug(f"Prompt length: {len(prompt)} chars")

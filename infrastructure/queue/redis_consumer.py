@@ -2,7 +2,9 @@
 
 import json
 import logging
-from typing import Any, Callable, Dict, Optional
+import time
+from datetime import datetime
+from typing import Any, Callable, Dict, Optional, List
 
 import redis
 
@@ -108,9 +110,18 @@ class RedisConsumer:
         """
         self._running = True
         logger.info("Starting Redis consumer loop...")
+        
+        last_scheduled_check = 0
+        scheduled_check_interval = 30  # Check scheduled queue every 30 seconds
 
         while self._running:
             try:
+                # Check scheduled queue periodically
+                now = time.time()
+                if now - last_scheduled_check >= scheduled_check_interval:
+                    self._process_scheduled_items(handler)
+                    last_scheduled_check = now
+                
                 task = self.pop_task(timeout=timeout if timeout > 0 else 5)
 
                 if task:
@@ -141,6 +152,62 @@ class RedisConsumer:
         """Stop the consumer loop."""
         self._running = False
 
+    def _process_scheduled_items(self, handler: Callable[[Dict[str, Any]], bool]) -> None:
+        """Check and process any due scheduled reanalysis items.
+        
+        Args:
+            handler: Function to handle each task
+        """
+        client = self._get_client()
+        
+        try:
+            now = datetime.now().timestamp()
+            
+            # Get all items due for reanalysis (score <= now)
+            due_ids = client.zrangebyscore("queue:scheduled", 0, now)
+            
+            if due_ids:
+                logger.info(f"📅 Found {len(due_ids)} scheduled item(s) due for reanalysis")
+            
+            for thread_id in due_ids:
+                # Get the scheduled data
+                data_key = f"scheduled:data:{thread_id}"
+                data = client.get(data_key)
+                
+                if data:
+                    scheduled_data = json.loads(data)
+                    logger.info(f"🔄 Processing scheduled reanalysis: {scheduled_data.get('thread_name', thread_id)}")
+                    
+                    # Build task with scheduled context
+                    task = {
+                        "thread_id": thread_id,
+                        "thread_name": scheduled_data.get("thread_name", ""),
+                        "scheduled_context": scheduled_data,
+                    }
+                    
+                    try:
+                        success = handler(task)
+                        
+                        if success:
+                            self.complete_task(thread_id)
+                            logger.info(f"✅ Scheduled reanalysis completed: {thread_id}")
+                        else:
+                            self.fail_task(thread_id, "Scheduled handler returned False")
+                            
+                    except Exception as e:
+                        logger.error(f"Error in scheduled reanalysis for {thread_id}: {e}")
+                        self.fail_task(thread_id, str(e))
+                
+                # Remove from scheduled set (whether successful or not)
+                client.zrem("queue:scheduled", thread_id)
+                # Clean up data
+                client.delete(data_key)
+                
+        except redis.RedisError as e:
+            logger.error(f"Redis error processing scheduled items: {e}")
+        except Exception as e:
+            logger.error(f"Error processing scheduled items: {e}")
+
     def get_stats(self) -> Dict[str, int]:
         """Get queue statistics.
 
@@ -153,6 +220,7 @@ class RedisConsumer:
             return {
                 "pending": client.llen(config.QUEUE_KEY),
                 "processing": client.scard(config.PROCESSING_KEY),
+                "scheduled": client.zcard("queue:scheduled"),
                 "completed": client.scard("queue:threads:completed"),
                 "failed": client.hlen("queue:threads:failed"),
             }

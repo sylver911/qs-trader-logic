@@ -12,6 +12,7 @@ class TradeAction(Enum):
     SKIP = "skip"
     EXECUTE = "execute"
     MODIFY = "modify"
+    DELAY = "delay"  # Scheduled for later reanalysis
     ERROR = "error"
 
 
@@ -131,6 +132,7 @@ class AIResponse:
     raw_response: str = ""
     model_used: str = ""
     trace_id: Optional[str] = None  # LiteLLM request_id for trace linking
+    delay_info: Optional[Dict[str, Any]] = None  # Info about scheduled reanalysis
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def to_mongo_update(self) -> Dict[str, Any]:
@@ -145,4 +147,6 @@ class AIResponse:
         }
         if self.trace_id:
             result["trace_id"] = self.trace_id
+        if self.delay_info:
+            result["delay_info"] = self.delay_info
         return result
