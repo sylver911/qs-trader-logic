@@ -27,6 +27,11 @@ class Settings:
     IBEAM_URL: str = os.getenv("IBEAM_URL", "http://localhost:5000")
     IB_ACCOUNT_ID: str = os.getenv("IB_ACCOUNT_ID", "")
 
+    # Market Data Source
+    # Set to "true" when you have IBKR market data subscription
+    # Default "false" uses yfinance (free, delayed data)
+    USE_IBKR_MARKET_DATA: bool = os.getenv("USE_IBKR_MARKET_DATA", "false").lower() in ("true", "1", "yes")
+
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
     LOG_WEBHOOK_URL: str = os.getenv("LOG_WEBHOOK_URL", "")

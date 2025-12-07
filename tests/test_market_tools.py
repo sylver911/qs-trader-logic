@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime, date
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, PropertyMock
 
 from tools.market_tools import MarketTools, is_nyse_open, NYSE_HOLIDAYS
 
@@ -139,3 +139,113 @@ class TestMarketTools:
         
         assert result["vix"] == 18.5
         assert "timestamp" in result
+
+
+class TestMarketDataProvider:
+    """Test MarketDataProvider class."""
+
+    def test_default_uses_yfinance(self):
+        """Default configuration uses yfinance."""
+        from infrastructure.broker.market_data import MarketDataProvider
+        
+        # Force yfinance by setting force_ibkr=False
+        provider = MarketDataProvider(force_ibkr=False)
+        
+        assert provider.using_ibkr is False
+        assert provider._ibkr_enabled is False
+
+    def test_force_ibkr_flag(self):
+        """force_ibkr parameter overrides env setting."""
+        from infrastructure.broker.market_data import MarketDataProvider
+        
+        mock_broker = MagicMock()
+        mock_broker.check_health.return_value = True
+        mock_broker.get_accounts.return_value = ["DU123"]
+        
+        provider = MarketDataProvider(broker=mock_broker, force_ibkr=True)
+        
+        assert provider._ibkr_enabled is True
+        assert provider._ibkr_healthy is True
+        assert provider.using_ibkr is True
+
+    def test_ibkr_unhealthy_falls_back(self):
+        """Unhealthy IBKR connection falls back to yfinance."""
+        from infrastructure.broker.market_data import MarketDataProvider
+        
+        mock_broker = MagicMock()
+        mock_broker.check_health.return_value = False
+        
+        provider = MarketDataProvider(broker=mock_broker, force_ibkr=True)
+        
+        assert provider._ibkr_enabled is True
+        assert provider._ibkr_healthy is False
+        assert provider.using_ibkr is False
+
+    def test_get_data_source_info(self):
+        """get_data_source_info returns correct structure."""
+        from infrastructure.broker.market_data import MarketDataProvider
+        
+        provider = MarketDataProvider(force_ibkr=False)
+        info = provider.get_data_source_info()
+        
+        assert "ibkr_enabled" in info
+        assert "ibkr_healthy" in info
+        assert "using_ibkr" in info
+        assert "primary_source" in info
+        assert info["primary_source"] == "yfinance"
+
+    def test_ibkr_price_fetch_success(self):
+        """IBKR price fetch returns price when successful."""
+        from infrastructure.broker.market_data import MarketDataProvider
+        
+        mock_broker = MagicMock()
+        mock_broker.check_health.return_value = True
+        mock_broker.get_accounts.return_value = ["DU123"]
+        mock_broker.search_contract.return_value = {"conid": "12345"}
+        
+        # Mock the client and snapshot response
+        mock_client = MagicMock()
+        mock_result = MagicMock()
+        mock_result.data = [{"31": "605.50"}]  # Field 31 = last price
+        mock_client.live_marketdata_snapshot.return_value = mock_result
+        mock_broker._get_client.return_value = mock_client
+        
+        provider = MarketDataProvider(broker=mock_broker, force_ibkr=True)
+        price = provider._get_price_ibkr("SPY")
+        
+        assert price == 605.50
+
+    def test_ibkr_price_fetch_uses_midpoint(self):
+        """IBKR uses bid/ask midpoint when last price unavailable."""
+        from infrastructure.broker.market_data import MarketDataProvider
+        
+        mock_broker = MagicMock()
+        mock_broker.check_health.return_value = True
+        mock_broker.get_accounts.return_value = ["DU123"]
+        mock_broker.search_contract.return_value = {"conid": "12345"}
+        
+        mock_client = MagicMock()
+        mock_result = MagicMock()
+        # No last price, but bid/ask available
+        mock_result.data = [{"84": "605.00", "86": "606.00"}]
+        mock_client.live_marketdata_snapshot.return_value = mock_result
+        mock_broker._get_client.return_value = mock_client
+        
+        provider = MarketDataProvider(broker=mock_broker, force_ibkr=True)
+        price = provider._get_price_ibkr("SPY")
+        
+        assert price == 605.50  # Midpoint of 605 and 606
+
+    @patch.dict('os.environ', {'USE_IBKR_MARKET_DATA': 'true'})
+    def test_env_variable_enables_ibkr(self):
+        """USE_IBKR_MARKET_DATA=true enables IBKR."""
+        from infrastructure.broker.market_data import MarketDataProvider
+        
+        mock_broker = MagicMock()
+        mock_broker.check_health.return_value = True
+        mock_broker.get_accounts.return_value = ["DU123"]
+        
+        # Don't use force_ibkr, let it read from env
+        provider = MarketDataProvider(broker=mock_broker, force_ibkr=None)
+        
+        assert provider._ibkr_enabled is True
