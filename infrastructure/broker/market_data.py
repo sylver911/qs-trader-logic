@@ -427,11 +427,16 @@ class MarketDataProvider:
                     (chain.calls['strike'] >= strike_min) & 
                     (chain.calls['strike'] <= strike_max)
                 ]
-                # Also filter out options with 0 bid AND 0 ask (illiquid/no quotes)
+                # Try to filter out options with 0 bid AND 0 ask (illiquid/no quotes)
+                # But keep them if ALL options would be filtered out (early market hours issue)
                 if 'bid' in filtered_calls.columns and 'ask' in filtered_calls.columns:
-                    filtered_calls = filtered_calls[
+                    liquid_calls = filtered_calls[
                         (filtered_calls['bid'] > 0) | (filtered_calls['ask'] > 0)
                     ]
+                    # If we have liquid options, use those; otherwise keep all with lastPrice
+                    if not liquid_calls.empty:
+                        filtered_calls = liquid_calls
+                    # else: keep filtered_calls with 0 bid/ask - AI will see lastPrice
                 calls_data = filtered_calls.to_dict(orient="records")
                 calls_data = convert_timestamps(calls_data)
 
@@ -441,21 +446,34 @@ class MarketDataProvider:
                     (chain.puts['strike'] >= strike_min) & 
                     (chain.puts['strike'] <= strike_max)
                 ]
-                # Also filter out options with 0 bid AND 0 ask (illiquid/no quotes)
+                # Try to filter out options with 0 bid AND 0 ask (illiquid/no quotes)
+                # But keep them if ALL options would be filtered out (early market hours issue)
                 if 'bid' in filtered_puts.columns and 'ask' in filtered_puts.columns:
-                    filtered_puts = filtered_puts[
+                    liquid_puts = filtered_puts[
                         (filtered_puts['bid'] > 0) | (filtered_puts['ask'] > 0)
                     ]
+                    # If we have liquid options, use those; otherwise keep all with lastPrice
+                    if not liquid_puts.empty:
+                        filtered_puts = liquid_puts
+                    # else: keep filtered_puts with 0 bid/ask - AI will see lastPrice
                 puts_data = filtered_puts.to_dict(orient="records")
                 puts_data = convert_timestamps(puts_data)
 
             # Only return nearest 5 expiries to reduce payload
             nearby_expiries = list(expirations)[:5]
             
-            # Add warning if no liquid options found
+            # Add warning if options have no live quotes (bid/ask = 0)
             warning = None
-            if not calls_data and not puts_data:
-                warning = "No liquid options found (all have bid=0 and ask=0). Market may be closed or options illiquid."
+            has_live_quotes = False
+            if calls_data:
+                has_live_quotes = any(c.get('bid', 0) > 0 or c.get('ask', 0) > 0 for c in calls_data)
+            if not has_live_quotes and puts_data:
+                has_live_quotes = any(p.get('bid', 0) > 0 or p.get('ask', 0) > 0 for p in puts_data)
+            
+            if not has_live_quotes and (calls_data or puts_data):
+                warning = "No live bid/ask quotes available (early market hours or delayed data). Using lastPrice for reference."
+            elif not calls_data and not puts_data:
+                warning = "No options found in the specified strike range."
 
             return {
                 "symbol": symbol,
