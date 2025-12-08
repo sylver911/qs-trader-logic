@@ -10,7 +10,7 @@ from openai import OpenAI
 
 from config.settings import config
 from config.redis_config import trading_config
-from infrastructure.prompts import get_system_prompt_cached, get_user_template_cached
+from infrastructure.prompts import get_system_prompt, get_user_template
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class LLMClient:
         """Render a Jinja2 template - uses MongoDB template if available."""
         try:
             # Try to get template from MongoDB first
-            user_template = get_user_template_cached()
+            user_template = get_user_template()
             if user_template:
                 # Use string-based template from MongoDB
                 string_env = Environment(trim_blocks=True, lstrip_blocks=True)
@@ -63,8 +63,8 @@ class LLMClient:
             raise
 
     def _get_system_prompt(self) -> str:
-        """Get the system prompt from MongoDB (cached) or fallback to default."""
-        return get_system_prompt_cached()
+        """Get the system prompt from MongoDB or fallback to default."""
+        return get_system_prompt()
 
     def analyze_signal(
         self,
