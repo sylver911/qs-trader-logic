@@ -33,6 +33,12 @@ class MongoHandler:
             self._db = self._client[self.db_name]
             logger.debug(f"Connected to MongoDB: {self.db_name}")
 
+    @property
+    def db(self) -> Database:
+        """Get database instance."""
+        self._connect()
+        return self._db
+
     def get_collection(self, name: str) -> Collection:
         """Get a collection.
 
