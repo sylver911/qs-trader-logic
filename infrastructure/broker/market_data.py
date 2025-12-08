@@ -378,7 +378,12 @@ class MarketDataProvider:
         symbol: str,
         expiry: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Get option chain from yfinance."""
+        """Get option chain from yfinance.
+        
+        Optimized to return only relevant data:
+        - Only strikes within ±10% of current price
+        - Limited available_expiries to nearest 5 (reduce payload)
+        """
         try:
             ticker = yf.Ticker(symbol)
 
@@ -393,23 +398,46 @@ class MarketDataProvider:
 
             # Get option chain
             chain = ticker.option_chain(target_expiry)
+            
+            # Get current price to filter relevant strikes
+            current_price = self.get_current_price(symbol)
+            
+            # Filter strikes to ±10% of current price (reduces data significantly)
+            strike_min = current_price * 0.90 if current_price else 0
+            strike_max = current_price * 1.10 if current_price else float('inf')
 
             # Convert DataFrames to dicts WITH TIMESTAMP CONVERSION
+            # Filter to relevant strikes only
             calls_data = []
             puts_data = []
 
             if not chain.calls.empty:
-                calls_data = chain.calls.to_dict(orient="records")
+                # Filter calls by strike range
+                filtered_calls = chain.calls[
+                    (chain.calls['strike'] >= strike_min) & 
+                    (chain.calls['strike'] <= strike_max)
+                ]
+                calls_data = filtered_calls.to_dict(orient="records")
                 calls_data = convert_timestamps(calls_data)
 
             if not chain.puts.empty:
-                puts_data = chain.puts.to_dict(orient="records")
+                # Filter puts by strike range
+                filtered_puts = chain.puts[
+                    (chain.puts['strike'] >= strike_min) & 
+                    (chain.puts['strike'] <= strike_max)
+                ]
+                puts_data = filtered_puts.to_dict(orient="records")
                 puts_data = convert_timestamps(puts_data)
+
+            # Only return nearest 5 expiries to reduce payload
+            nearby_expiries = list(expirations)[:5]
 
             return {
                 "symbol": symbol,
                 "expiry": target_expiry,
-                "available_expiries": list(expirations),
+                "available_expiries": nearby_expiries,
+                "current_price": current_price,
+                "strike_range": f"{strike_min:.2f} - {strike_max:.2f}",
                 "calls": calls_data,
                 "puts": puts_data,
                 "source": "yfinance",
