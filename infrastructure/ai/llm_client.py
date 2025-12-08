@@ -66,6 +66,60 @@ class LLMClient:
         """Get the system prompt from MongoDB or fallback to default."""
         return get_system_prompt()
 
+    def _format_prefetched_data(self, data: Dict[str, Any]) -> str:
+        """Format pre-fetched tool data for inclusion in prompt."""
+        time_data = data.get("time", {})
+        option_chain = data.get("option_chain", {})
+        account = data.get("account", {})
+        positions = data.get("positions", {})
+        
+        sections = ["\n---\n## PRE-FETCHED DATA (already retrieved for you)\n"]
+        
+        # Time
+        if time_data and not time_data.get("error"):
+            sections.append(f"""### Current Time
+- **Time (ET):** {time_data.get('time_est', 'N/A')}
+- **Date:** {time_data.get('date', 'N/A')} ({time_data.get('day_of_week', 'N/A')})
+- **Market Status:** {time_data.get('market_status', 'N/A')}
+- **Is Open:** {time_data.get('is_market_open', 'Unknown')}
+""")
+        
+        # Option chain
+        if option_chain and not option_chain.get("error"):
+            sections.append(f"""### Option Chain
+- **Underlying Price:** ${option_chain.get('current_price', 0):.2f}
+- **Expiries:** {', '.join(option_chain.get('available_expiries', [])[:5])}
+""")
+            if option_chain.get('calls'):
+                sections.append("**Calls:**\n")
+                for c in option_chain['calls'][:6]:
+                    itm = "ITM" if c.get('inTheMoney') else "OTM"
+                    sections.append(f"  ${c.get('strike')}: ${c.get('bid', 0):.2f}/${c.get('ask', 0):.2f} ({itm})\n")
+            if option_chain.get('puts'):
+                sections.append("**Puts:**\n")
+                for p in option_chain['puts'][:6]:
+                    itm = "ITM" if p.get('inTheMoney') else "OTM"
+                    sections.append(f"  ${p.get('strike')}: ${p.get('bid', 0):.2f}/${p.get('ask', 0):.2f} ({itm})\n")
+        
+        # Account
+        if account and not account.get("error"):
+            sections.append(f"""### Account
+- **Available:** ${account.get('usd_available_for_trading', 0):,.2f}
+- **Buying Power:** ${account.get('usd_buying_power', 0):,.2f}
+- **Net Liq:** ${account.get('usd_net_liquidation', 0):,.2f}
+""")
+        
+        # Positions
+        if positions and not positions.get("error"):
+            sections.append(f"""### Positions
+- **Count:** {positions.get('count', 0)}
+- **Tickers:** {', '.join(positions.get('tickers', [])) or 'None'}
+""")
+        
+        sections.append("\n**Note:** This data is already fetched. You can still call tools if needed, but the above is current.\n---\n")
+        
+        return "".join(sections)
+
     def analyze_signal(
         self,
         signal_data: Dict[str, Any],
@@ -74,6 +128,7 @@ class LLMClient:
         trading_params: Dict[str, Any],
         tools: Optional[List[Dict[str, Any]]] = None,
         scheduled_context: Optional[Dict[str, Any]] = None,
+        prefetched_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Analyze a trading signal with AI.
         
@@ -84,6 +139,7 @@ class LLMClient:
             trading_params: Trading configuration
             tools: Available tools
             scheduled_context: Context from previous analysis if this is a reanalysis
+            prefetched_data: Pre-fetched tool results to include in prompt
         """
         model = trading_config.current_llm_model
 
@@ -120,6 +176,11 @@ Only use schedule_reanalysis again if absolutely necessary (max {scheduled_conte
 ---
 """
             prompt = prompt + reanalysis_context
+
+        # Add pre-fetched tool data if available
+        if prefetched_data:
+            prefetch_context = self._format_prefetched_data(prefetched_data)
+            prompt = prompt + prefetch_context
 
         logger.debug(f"Sending prompt to {model}")
         logger.debug(f"Prompt length: {len(prompt)} chars")

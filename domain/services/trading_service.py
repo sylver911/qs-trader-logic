@@ -2,6 +2,7 @@
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -98,9 +99,16 @@ class TradingService:
                 logger.debug("Dry run mode - using simulated portfolio")
                 portfolio_data = {"positions": [], "cash": 10000, "pnl": 0}
 
+            # Pre-fetch tool data if enabled (reduces token usage)
+            prefetched_data = None
+            if trading_config.use_prefetch_mode:
+                logger.info("🔄 Pre-fetching tool data...")
+                prefetched_data = self._prefetch_tool_data(signal)
+                logger.info("   ✅ Pre-fetch complete")
+
             # Let AI analyze and decide
             logger.info("🤖 Starting AI analysis...")
-            ai_response = self._analyze_with_ai(signal, market_data, portfolio_data, scheduled_context)
+            ai_response = self._analyze_with_ai(signal, market_data, portfolio_data, scheduled_context, prefetched_data)
 
             # Check for DELAY decision
             if ai_response.decision.action == TradeAction.DELAY:
@@ -235,12 +243,61 @@ class TradingService:
             return {}
         return {"symbol": ticker, "timestamp": datetime.now().isoformat()}
 
+    def _prefetch_tool_data(self, signal: Signal) -> Dict[str, Any]:
+        """Pre-fetch all tool data in parallel to include in prompt.
+        
+        This reduces token usage by providing data upfront so AI 
+        doesn't need to call tools iteratively.
+        """
+        data = {}
+        market_handlers = self._market_tools.get_handlers()
+        portfolio_handlers = self._portfolio_tools.get_handlers()
+        
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {}
+            
+            # 1. Current time
+            futures[executor.submit(market_handlers["get_current_time"])] = "time"
+            
+            # 2. Option chain (if ticker known)
+            if signal.ticker:
+                if signal.expiry:
+                    futures[executor.submit(
+                        market_handlers["get_option_chain"],
+                        symbol=signal.ticker,
+                        expiry=signal.expiry
+                    )] = "option_chain"
+                else:
+                    futures[executor.submit(
+                        market_handlers["get_option_chain"],
+                        symbol=signal.ticker
+                    )] = "option_chain"
+            
+            # 3. Account summary
+            futures[executor.submit(portfolio_handlers["get_account_summary"])] = "account"
+            
+            # 4. Current positions
+            futures[executor.submit(portfolio_handlers["get_positions"])] = "positions"
+            
+            # Collect results
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    data[key] = future.result()
+                    logger.debug(f"   ✓ Prefetch {key}")
+                except Exception as e:
+                    logger.warning(f"   ✗ Prefetch {key} failed: {e}")
+                    data[key] = {"error": str(e)}
+        
+        return data
+
     def _analyze_with_ai(
         self,
         signal: Signal,
         market_data: Dict[str, Any],
         portfolio_data: Dict[str, Any],
         scheduled_context: Dict[str, Any] = None,
+        prefetched_data: Dict[str, Any] = None,
     ) -> AIResponse:
         """Analyze signal with AI using iterative tool calling.
         
@@ -278,7 +335,8 @@ class TradingService:
             portfolio_data=portfolio_data,
             trading_params=trading_params,
             tools=tools,
-            scheduled_context=scheduled_context,  # Pass scheduled context to prompt
+            scheduled_context=scheduled_context,
+            prefetched_data=prefetched_data,  # Pre-fetched tool data for prompt
         )
         
         # Track request_id for trace linking (use last one from conversation)

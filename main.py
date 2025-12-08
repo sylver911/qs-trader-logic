@@ -17,7 +17,6 @@ from config.redis_config import trading_config
 from infrastructure.queue.redis_consumer import RedisConsumer
 from infrastructure.broker.ibkr_client import IBKRBroker
 from domain.services.trading_service import TradingService
-from domain.services.trading_service_v2 import TradingServiceV2
 from domain.services.order_monitor import init_order_monitor
 from utils.logging_config import setup_logging
 
@@ -64,15 +63,10 @@ def main() -> int:
     logger.info(f"Max VIX: {params['max_vix_level']}")
     logger.info(f"Min Confidence: {params['min_ai_confidence_score']:.0%}")
     logger.info(f"Whitelist: {params['whitelist_tickers']}")
-    logger.info(f"Prefetch Mode (V2): {'ON - Single LLM call' if params['use_prefetch_mode'] else 'OFF - Multi-turn'}")
+    logger.info(f"Prefetch Mode: {'ON' if params['use_prefetch_mode'] else 'OFF'}")
 
-    # Initialize services - use V2 if prefetch mode enabled
-    if params['use_prefetch_mode']:
-        trading_service = TradingServiceV2()
-        logger.info("🚀 Using TradingService V2 (prefetch mode)")
-    else:
-        trading_service = TradingService()
-        logger.info("📋 Using TradingService V1 (multi-turn)")
+    # Initialize services
+    trading_service = TradingService()
     consumer = RedisConsumer()
     
     # Start Order Monitor for P&L tracking (only in live mode)
