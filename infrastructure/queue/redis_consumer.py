@@ -111,6 +111,9 @@ class RedisConsumer:
         self._running = True
         logger.info("Starting Redis consumer loop...")
         
+        # Clean up any stale processing items from previous runs
+        self._recover_stale_processing()
+        
         last_scheduled_check = 0
         scheduled_check_interval = 30  # Check scheduled queue every 30 seconds
 
@@ -207,6 +210,31 @@ class RedisConsumer:
             logger.error(f"Redis error processing scheduled items: {e}")
         except Exception as e:
             logger.error(f"Error processing scheduled items: {e}")
+
+    def _recover_stale_processing(self) -> None:
+        """Clear stale items from processing set on startup.
+        
+        Items in processing set from previous crashed runs should be removed.
+        They will be retried if they're still in the pending queue.
+        """
+        client = self._get_client()
+        
+        try:
+            processing_items = client.smembers(config.PROCESSING_KEY)
+            
+            if processing_items:
+                count = len(processing_items)
+                logger.warning(f"🧹 Found {count} stale item(s) in processing set from previous run")
+                
+                # Move stale items to failed (so they can be manually retried)
+                for thread_id in processing_items:
+                    client.srem(config.PROCESSING_KEY, thread_id)
+                    client.hset("queue:threads:failed", thread_id, "Stale from previous run - processor crashed or restarted")
+                    
+                logger.info(f"🧹 Moved {count} stale item(s) to failed queue for manual retry")
+                
+        except redis.RedisError as e:
+            logger.error(f"Redis error recovering stale items: {e}")
 
     def get_stats(self) -> Dict[str, int]:
         """Get queue statistics.
