@@ -88,8 +88,11 @@ class IBKRBroker:
             client = self._get_client()
             # Use portfolio_summary - returns cash balances, settled cash, etc.
             # Note: portfolio_accounts must be called first per ibind docs
-            client.portfolio_accounts()
+            accounts_result = client.portfolio_accounts()
+            logger.debug(f"portfolio_accounts result: {accounts_result}")
+            
             result = client.portfolio_summary(account_id=self._account_id)
+            logger.info(f"portfolio_summary result.data: {result.data}")
             return result.data if result.data else None
         except Exception as e:
             logger.error(f"Failed to get account summary: {e}")
