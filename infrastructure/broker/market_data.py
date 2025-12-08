@@ -202,7 +202,12 @@ class MarketDataProvider:
     def _get_price_yfinance(self, symbol: str) -> Optional[float]:
         """Get price from yfinance."""
         try:
-            ticker = yf.Ticker(symbol)
+            # Index symbols need ^ prefix in yfinance
+            yf_symbol = symbol
+            if symbol.upper() in ['SPX', 'NDX', 'RUT', 'VIX', 'DJX']:
+                yf_symbol = f"^{symbol.upper()}"
+            
+            ticker = yf.Ticker(yf_symbol)
             data = ticker.history(period="1d")
 
             if data.empty:
@@ -385,7 +390,12 @@ class MarketDataProvider:
         - Limited available_expiries to nearest 5 (reduce payload)
         """
         try:
-            ticker = yf.Ticker(symbol)
+            # Index symbols need ^ prefix in yfinance
+            yf_symbol = symbol
+            if symbol.upper() in ['SPX', 'NDX', 'RUT', 'VIX', 'DJX']:
+                yf_symbol = f"^{symbol.upper()}"
+            
+            ticker = yf.Ticker(yf_symbol)
 
             # Get available expirations
             expirations = ticker.options
@@ -417,6 +427,11 @@ class MarketDataProvider:
                     (chain.calls['strike'] >= strike_min) & 
                     (chain.calls['strike'] <= strike_max)
                 ]
+                # Also filter out options with 0 bid AND 0 ask (illiquid/no quotes)
+                if 'bid' in filtered_calls.columns and 'ask' in filtered_calls.columns:
+                    filtered_calls = filtered_calls[
+                        (filtered_calls['bid'] > 0) | (filtered_calls['ask'] > 0)
+                    ]
                 calls_data = filtered_calls.to_dict(orient="records")
                 calls_data = convert_timestamps(calls_data)
 
@@ -426,11 +441,21 @@ class MarketDataProvider:
                     (chain.puts['strike'] >= strike_min) & 
                     (chain.puts['strike'] <= strike_max)
                 ]
+                # Also filter out options with 0 bid AND 0 ask (illiquid/no quotes)
+                if 'bid' in filtered_puts.columns and 'ask' in filtered_puts.columns:
+                    filtered_puts = filtered_puts[
+                        (filtered_puts['bid'] > 0) | (filtered_puts['ask'] > 0)
+                    ]
                 puts_data = filtered_puts.to_dict(orient="records")
                 puts_data = convert_timestamps(puts_data)
 
             # Only return nearest 5 expiries to reduce payload
             nearby_expiries = list(expirations)[:5]
+            
+            # Add warning if no liquid options found
+            warning = None
+            if not calls_data and not puts_data:
+                warning = "No liquid options found (all have bid=0 and ask=0). Market may be closed or options illiquid."
 
             return {
                 "symbol": symbol,
@@ -440,6 +465,9 @@ class MarketDataProvider:
                 "strike_range": f"{strike_min:.2f} - {strike_max:.2f}",
                 "calls": calls_data,
                 "puts": puts_data,
+                "calls_count": len(calls_data),
+                "puts_count": len(puts_data),
+                "warning": warning,
                 "source": "yfinance",
             }
 
