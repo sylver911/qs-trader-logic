@@ -287,7 +287,7 @@ class TradingServiceV2:
                             modified_stop_loss=args.get("stop_loss"),
                             modified_size=args.get("quantity"),
                         ),
-                        raw_response=json.dumps(args),
+                        raw_response=json.dumps(args),  # Contains symbol from AI
                         model_used=model,
                         trace_id=request_id,
                     )
@@ -510,18 +510,25 @@ Analyze the signal, check the current prices, calculate R:R, and make your decis
         """Execute trade based on AI decision."""
         decision = ai_response.decision
         
+        # Get symbol from AI's raw response (may be option symbol)
+        try:
+            ai_args = json.loads(ai_response.raw_response)
+            symbol = ai_args.get("symbol") or signal.ticker
+        except:
+            symbol = signal.ticker
+        
         entry = decision.modified_entry or signal.entry_price
         target = decision.modified_target or signal.target_price
         stop_loss = decision.modified_stop_loss or signal.stop_loss
         quantity = int(decision.modified_size) if decision.modified_size else 1
 
-        if not all([signal.ticker, entry, target, stop_loss]):
+        if not all([symbol, entry, target, stop_loss]):
             return TradeResult(success=False, error="Missing required trade parameters")
 
         # Prepare trade data for P&L tracking
         trade_data = {
             "thread_id": signal.thread_id,
-            "ticker": signal.ticker,
+            "ticker": symbol,  # Use AI's symbol
             "direction": signal.direction,
             "entry_price": entry,
             "quantity": quantity,
@@ -533,7 +540,7 @@ Analyze the signal, check the current prices, calculate R:R, and make your decis
 
         # Dry run mode
         if not trading_config.execute_orders:
-            logger.info(f"[DRY RUN] {signal.ticker} @ ${entry} | TP: ${target} | SL: ${stop_loss}")
+            logger.info(f"[DRY RUN] {symbol} @ ${entry} | TP: ${target} | SL: ${stop_loss}")
             trade_data["order_id"] = "DRY_RUN_SIMULATED"
             trade_data["simulated"] = True
             trade_id = trades_repo.save_trade(trade_data)
@@ -542,7 +549,7 @@ Analyze the signal, check the current prices, calculate R:R, and make your decis
         # Live execution
         try:
             result = self._order_tools.place_bracket_order(
-                symbol=signal.ticker,
+                symbol=symbol,  # Use AI's symbol
                 side="BUY" if signal.direction in ["CALL", "BUY"] else "SELL",
                 quantity=quantity,
                 entry_price=entry,
