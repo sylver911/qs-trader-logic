@@ -201,7 +201,7 @@ Only use schedule_reanalysis again if absolutely necessary (max {scheduled_conte
                 tools=tools if tools else None,
                 tool_choice="auto" if tools else None,
                 temperature=0.3,
-                max_tokens=2000,
+                max_tokens=8000,  # Higher for DeepSeek Reasoner
             )
 
             message = response.choices[0].message
@@ -331,7 +331,7 @@ Only use schedule_reanalysis again if absolutely necessary (max {scheduled_conte
                 tools=tools if tools else None,
                 tool_choice="auto" if tools else None,
                 temperature=0.3,
-                max_tokens=2000,
+                max_tokens=8000,  # Higher for DeepSeek Reasoner
             )
 
             message = response.choices[0].message
