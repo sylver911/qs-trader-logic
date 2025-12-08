@@ -306,22 +306,36 @@ class TradingService:
             market_data: Current market data
             portfolio_data: Portfolio information
             scheduled_context: Context from previous analysis if this is a reanalysis
+            prefetched_data: Pre-fetched tool data (if prefetch mode enabled)
         """
         
-        # Combine all tools (including schedule_reanalysis)
-        tools = (
-            MarketTools.get_tool_definitions()
-            + PortfolioTools.get_tool_definitions()
-            + OrderTools.get_tool_definitions()
-            + ScheduleTools.get_tool_definitions()
-        )
-
-        handlers = {
-            **self._market_tools.get_handlers(),
-            **self._portfolio_tools.get_handlers(),
-            **self._order_tools.get_handlers(),
-            **self._schedule_tools.get_handlers(),
-        }
+        # If prefetch mode - only decision tools (data already in prompt)
+        # If not prefetch - all tools (AI fetches data itself)
+        if prefetched_data:
+            # Only decision tools - skip, execute, schedule
+            tools = (
+                OrderTools.get_tool_definitions()
+                + ScheduleTools.get_tool_definitions()
+            )
+            handlers = {
+                **self._order_tools.get_handlers(),
+                **self._schedule_tools.get_handlers(),
+            }
+            logger.debug("Prefetch mode: using decision tools only")
+        else:
+            # All tools - AI fetches data via tool calls
+            tools = (
+                MarketTools.get_tool_definitions()
+                + PortfolioTools.get_tool_definitions()
+                + OrderTools.get_tool_definitions()
+                + ScheduleTools.get_tool_definitions()
+            )
+            handlers = {
+                **self._market_tools.get_handlers(),
+                **self._portfolio_tools.get_handlers(),
+                **self._order_tools.get_handlers(),
+                **self._schedule_tools.get_handlers(),
+            }
 
         trading_params = trading_config.get_all()
         
