@@ -86,15 +86,11 @@ class IBKRBroker:
         """
         try:
             client = self._get_client()
-            # Use portfolio summary endpoint directly for reliable data
-            # This matches what the dashboard uses: portfolio/{account_id}/summary
-            import requests
-            url = f"{config.IBEAM_URL}/v1/api/portfolio/{self._account_id}/summary"
-            resp = requests.get(url, verify=False, timeout=10)
-            if resp.status_code == 200:
-                return resp.json()
-            logger.error(f"Account summary request failed: {resp.status_code}")
-            return None
+            # Use portfolio_summary - returns cash balances, settled cash, etc.
+            # Note: portfolio_accounts must be called first per ibind docs
+            client.portfolio_accounts()
+            result = client.portfolio_summary(account_id=self._account_id)
+            return result.data if result.data else None
         except Exception as e:
             logger.error(f"Failed to get account summary: {e}")
             return None
