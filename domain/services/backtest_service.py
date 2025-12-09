@@ -18,7 +18,7 @@ except ImportError:
     HAS_YFINANCE = False
 
 from config.settings import config
-from infrastructure.database.mongo_handler import MongoHandler
+from infrastructure.storage.mongo import MongoHandler
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,6 @@ class BacktestService:
         try:
             with MongoHandler() as mongo:
                 mongo.update_one(
-                    config.MONGO_DB_NAME,
                     config.THREADS_COLLECTION,
                     query={"thread_id": thread_id},
                     update_data={
