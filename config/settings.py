@@ -11,6 +11,7 @@ class Settings:
     # MongoDB
     MONGO_URL: str = os.getenv("MONGO_URL", "mongodb://localhost:27017/")
     MONGO_DB_NAME: str = os.getenv("MONGO_DB_NAME", os.getenv("QS_DB", "qs"))
+    SETTINGS_DB: str = os.getenv("SETTINGS_DB", "app_settings")  # For prompts
     THREADS_COLLECTION: str = "discord_threads"
 
     # Redis

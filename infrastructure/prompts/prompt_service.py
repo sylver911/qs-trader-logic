@@ -122,10 +122,14 @@ def get_system_prompt() -> str:
     try:
         client = _get_mongo_client()
         if client:
-            db = client.get_database(config.MONGO_DB_NAME or "qs")
+            # Use SETTINGS_DB (app_settings) where dashboard stores prompts
+            db = client.get_database(config.SETTINGS_DB or "app_settings")
             prompt = db.prompts.find_one({"type": "system_prompt", "is_active": True})
             if prompt:
+                logger.debug(f"Loaded system prompt: {prompt.get('name', 'unnamed')}")
                 return prompt.get("content", _DEFAULT_SYSTEM_PROMPT)
+            else:
+                logger.warning("No active system_prompt found in MongoDB, using default")
     except Exception as e:
         logger.warning(f"Failed to fetch system prompt from MongoDB: {e}")
     
@@ -137,10 +141,14 @@ def get_user_template() -> str:
     try:
         client = _get_mongo_client()
         if client:
-            db = client.get_database(config.MONGO_DB_NAME or "qs")
+            # Use SETTINGS_DB (app_settings) where dashboard stores prompts
+            db = client.get_database(config.SETTINGS_DB or "app_settings")
             prompt = db.prompts.find_one({"type": "user_template", "is_active": True})
             if prompt:
+                logger.debug(f"Loaded user template: {prompt.get('name', 'unnamed')}")
                 return prompt.get("content", _DEFAULT_USER_TEMPLATE)
+            else:
+                logger.warning("No active user_template found in MongoDB, using default")
     except Exception as e:
         logger.warning(f"Failed to fetch user template from MongoDB: {e}")
     
