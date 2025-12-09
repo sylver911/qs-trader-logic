@@ -491,9 +491,20 @@ class TradingService:
                                 logger.info(f"   💰 AI called place_bracket_order")
                                 
                                 # Create trade result from tool execution
+                                # Note: order can be a list (bracket = 3 orders) or dict
+                                order_data = tool_result.get("order")
+                                order_id = None
+                                if order_data:
+                                    if isinstance(order_data, list) and len(order_data) > 0:
+                                        # Bracket order returns list - get first order's ID
+                                        first_order = order_data[0] if isinstance(order_data[0], dict) else {}
+                                        order_id = str(first_order.get("order_id", "")) if first_order.get("order_id") else None
+                                    elif isinstance(order_data, dict):
+                                        order_id = str(order_data.get("order_id", "")) if order_data.get("order_id") else None
+                                
                                 trade_result = TradeResult(
                                     success=tool_result.get("success", False),
-                                    order_id=str(tool_result.get("order", {}).get("order_id", "")) if tool_result.get("order") else None,
+                                    order_id=order_id,
                                     error=tool_result.get("error"),
                                 )
                                 
