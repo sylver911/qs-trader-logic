@@ -14,6 +14,9 @@ from infrastructure.prompts import get_system_prompt, get_user_template
 
 logger = logging.getLogger(__name__)
 
+# Fallback model if primary fails (rate limit, etc.)
+FALLBACK_MODEL = "gpt-4o-mini"
+
 
 class LLMClient:
     """LiteLLM client with Jinja2 templating."""
@@ -185,68 +188,91 @@ Only use schedule_reanalysis again if absolutely necessary (max {scheduled_conte
         logger.debug(f"Sending prompt to {model}")
         logger.debug(f"Prompt length: {len(prompt)} chars")
 
-        try:
-            # Use OpenAI client directly - works with any OpenAI-compatible API (like LiteLLM proxy)
-            client = OpenAI(
-                base_url=self._api_base,
-                api_key=self._api_key or "dummy",
-            )
-            
-            response = client.chat.completions.create(
-                model=model,  # Send model name as-is, proxy handles routing
-                messages=[
-                    {"role": "system", "content": self._get_system_prompt()},
-                    {"role": "user", "content": prompt},
-                ],
-                tools=tools if tools else None,
-                tool_choice="auto" if tools else None,
-                temperature=0.3,
-                max_tokens=8000,  # Higher for DeepSeek Reasoner
-            )
+        # Try primary model, fallback to secondary if rate limited
+        models_to_try = [model]
+        if model != FALLBACK_MODEL:
+            models_to_try.append(FALLBACK_MODEL)
+        
+        last_error = None
+        for current_model in models_to_try:
+            try:
+                result = self._call_llm(current_model, prompt, tools)
+                if "error" not in result:
+                    return result
+                # If error, try next model
+                last_error = result.get("error")
+                logger.warning(f"Model {current_model} failed: {last_error}, trying fallback...")
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Model {current_model} exception: {e}, trying fallback...")
+        
+        # All models failed
+        logger.error(f"All models failed. Last error: {last_error}")
+        return {
+            "content": "",
+            "tool_calls": [],
+            "error": last_error,
+            "model": model,
+        }
 
-            message = response.choices[0].message
-            content = message.content or ""
+    def _call_llm(
+        self,
+        model: str,
+        prompt: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Make a single LLM call. Raises exception on failure."""
+        client = OpenAI(
+            base_url=self._api_base,
+            api_key=self._api_key or "dummy",
+        )
+        
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": self._get_system_prompt()},
+                {"role": "user", "content": prompt},
+            ],
+            tools=tools if tools else None,
+            tool_choice="auto" if tools else None,
+            temperature=0.3,
+            max_tokens=8000,
+        )
 
-            tool_calls = []
-            if hasattr(message, "tool_calls") and message.tool_calls:
-                tool_calls = [
-                    {
-                        "id": tc.id,
-                        "function": tc.function.name,
-                        "arguments": json.loads(tc.function.arguments),
-                    }
-                    for tc in message.tool_calls
-                ]
+        message = response.choices[0].message
+        content = message.content or ""
 
-            reasoning_content = getattr(message, "reasoning_content", None)
-            if not reasoning_content and hasattr(message, "provider_specific_fields"):
-                reasoning_content = message.provider_specific_fields.get("reasoning_content")
+        tool_calls = []
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            tool_calls = [
+                {
+                    "id": tc.id,
+                    "function": tc.function.name,
+                    "arguments": json.loads(tc.function.arguments),
+                }
+                for tc in message.tool_calls
+            ]
 
-            result = {
-                "content": content,
-                "tool_calls": tool_calls,
-                "reasoning_content": reasoning_content,
-                "model": model,
-                "request_id": response.id,  # LiteLLM request ID for trace linking
-                "_prompt": prompt,
-                "usage": {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                },
-            }
+        reasoning_content = getattr(message, "reasoning_content", None)
+        if not reasoning_content and hasattr(message, "provider_specific_fields"):
+            reasoning_content = message.provider_specific_fields.get("reasoning_content")
 
-            logger.info(f"AI response received, {result['usage']['total_tokens']} tokens")
-            return result
+        result = {
+            "content": content,
+            "tool_calls": tool_calls,
+            "reasoning_content": reasoning_content,
+            "model": model,
+            "request_id": response.id,
+            "_prompt": prompt,
+            "usage": {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            },
+        }
 
-        except Exception as e:
-            logger.error(f"LLM call failed: {e}")
-            return {
-                "content": "",
-                "tool_calls": [],
-                "error": str(e),
-                "model": model,
-            }
+        logger.info(f"AI response from {model}, {result['usage']['total_tokens']} tokens")
+        return result
 
     def execute_tool_calls(
         self,
@@ -309,59 +335,72 @@ Only use schedule_reanalysis again if absolutely necessary (max {scheduled_conte
         model = model or trading_config.current_llm_model
 
         logger.debug(f"continue_with_tool_results called with {len(messages)} messages")
-        for i, msg in enumerate(messages):
-            role = msg.get("role", "unknown")
-            if role == "tool":
-                logger.debug(f"  Message {i}: role=tool, call_id={msg.get('tool_call_id', 'N/A')}")
-            elif role == "assistant" and msg.get("tool_calls"):
-                logger.debug(f"  Message {i}: role=assistant with {len(msg.get('tool_calls', []))} tool_calls")
-            else:
-                logger.debug(f"  Message {i}: role={role}")
 
-        try:
-            # Use OpenAI client directly - works with any OpenAI-compatible API (like LiteLLM proxy)
-            client = OpenAI(
-                base_url=self._api_base,
-                api_key=self._api_key or "dummy",
-            )
-            
-            response = client.chat.completions.create(
-                model=model,  # Send model name as-is, proxy handles routing
-                messages=messages,
-                tools=tools if tools else None,
-                tool_choice="auto" if tools else None,
-                temperature=0.3,
-                max_tokens=8000,  # Higher for DeepSeek Reasoner
-            )
+        # Try primary model, fallback to secondary if rate limited
+        models_to_try = [model]
+        if model != FALLBACK_MODEL:
+            models_to_try.append(FALLBACK_MODEL)
+        
+        last_error = None
+        for current_model in models_to_try:
+            try:
+                result = self._continue_call_llm(current_model, messages, tools)
+                if "error" not in result:
+                    return result
+                last_error = result.get("error")
+                logger.warning(f"Continue: Model {current_model} failed: {last_error}, trying fallback...")
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Continue: Model {current_model} exception: {e}, trying fallback...")
+        
+        logger.error(f"Continue: All models failed. Last error: {last_error}")
+        return {"content": "", "tool_calls": [], "error": last_error}
 
-            message = response.choices[0].message
-            content = message.content or ""
+    def _continue_call_llm(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Make a continue LLM call. Raises exception on failure."""
+        client = OpenAI(
+            base_url=self._api_base,
+            api_key=self._api_key or "dummy",
+        )
+        
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools if tools else None,
+            tool_choice="auto" if tools else None,
+            temperature=0.3,
+            max_tokens=8000,
+        )
 
-            tool_calls = []
-            if hasattr(message, "tool_calls") and message.tool_calls:
-                tool_calls = [
-                    {
-                        "id": tc.id,
-                        "function": tc.function.name,
-                        "arguments": json.loads(tc.function.arguments),
-                    }
-                    for tc in message.tool_calls
-                ]
+        message = response.choices[0].message
+        content = message.content or ""
 
-            reasoning_content = getattr(message, "reasoning_content", None)
-            if not reasoning_content and hasattr(message, "provider_specific_fields"):
-                reasoning_content = message.provider_specific_fields.get("reasoning_content")
+        tool_calls = []
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            tool_calls = [
+                {
+                    "id": tc.id,
+                    "function": tc.function.name,
+                    "arguments": json.loads(tc.function.arguments),
+                }
+                for tc in message.tool_calls
+            ]
 
-            logger.debug(f"continue_with_tool_results response: content_len={len(content)}, tool_calls={len(tool_calls)}")
+        reasoning_content = getattr(message, "reasoning_content", None)
+        if not reasoning_content and hasattr(message, "provider_specific_fields"):
+            reasoning_content = message.provider_specific_fields.get("reasoning_content")
 
-            return {
-                "content": content,
-                "tool_calls": tool_calls,
-                "reasoning_content": reasoning_content,
-                "model": model,
-                "request_id": response.id,  # LiteLLM request ID for trace linking
-            }
+        logger.debug(f"continue response from {model}: content_len={len(content)}, tool_calls={len(tool_calls)}")
 
-        except Exception as e:
-            logger.error(f"Continue call failed: {e}", exc_info=True)
-            return {"content": "", "tool_calls": [], "error": str(e)}
+        return {
+            "content": content,
+            "tool_calls": tool_calls,
+            "reasoning_content": reasoning_content,
+            "model": model,
+            "request_id": response.id,
+        }
