@@ -434,6 +434,17 @@ class TradingService:
                             # If schedule_reanalysis was called successfully, return DELAY
                             if func_name == "schedule_reanalysis" and tool_result.get("success"):
                                 logger.info(f"   ⏰ AI scheduled reanalysis: {tool_result.get('reason', 'N/A')}")
+                                
+                                # Record signal price for backtesting
+                                product = tool_result.get("product")
+                                if product:
+                                    try:
+                                        from domain.services.backtest_service import get_backtest_service
+                                        backtest_svc = get_backtest_service()
+                                        backtest_svc.record_signal_price(signal.thread_id, product)
+                                    except Exception as e:
+                                        logger.warning(f"Failed to record backtest price: {e}")
+                                
                                 return AIResponse(
                                     decision=TradeDecision(
                                         action=TradeAction.DELAY,
@@ -453,6 +464,17 @@ class TradingService:
                             # If skip_signal tool was called, return immediately with decision
                             if func_name == "skip_signal":
                                 logger.info(f"   ⏭️ AI called skip_signal: {tool_result.get('reason', 'No reason')}")
+                                
+                                # Record signal price for backtesting
+                                product = tool_result.get("product")
+                                if product:
+                                    try:
+                                        from domain.services.backtest_service import get_backtest_service
+                                        backtest_svc = get_backtest_service()
+                                        backtest_svc.record_signal_price(signal.thread_id, product)
+                                    except Exception as e:
+                                        logger.warning(f"Failed to record backtest price: {e}")
+                                
                                 return AIResponse(
                                     decision=TradeDecision(
                                         action=TradeAction.SKIP,
@@ -475,12 +497,15 @@ class TradingService:
                                     error=tool_result.get("error"),
                                 )
                                 
+                                # Extract product info for backtest tracking
+                                product = tool_result.get("product")
+                                
                                 # Save trade to P&L tracking if successful
                                 trade_id = None
                                 if trade_result.success and trading_config.execute_orders:
                                     trade_data = {
                                         "thread_id": signal.thread_id,
-                                        "ticker": args.get("symbol"),  # Use the actual option symbol from AI
+                                        "ticker": tool_result.get("symbol"),  # The built OCC symbol
                                         "direction": args.get("side"),
                                         "entry_price": args.get("entry_price"),
                                         "quantity": args.get("quantity"),
@@ -489,9 +514,19 @@ class TradingService:
                                         "order_id": trade_result.order_id,
                                         "conid": tool_result.get("conid"),
                                         "model_used": response.get("model", ""),
+                                        "product": product,  # Add product info
                                     }
                                     trade_id = trades_repo.save_trade(trade_data)
                                     trade_result.trade_id = trade_id
+                                
+                                # Record signal price for backtesting
+                                if product:
+                                    try:
+                                        from domain.services.backtest_service import get_backtest_service
+                                        backtest_svc = get_backtest_service()
+                                        backtest_svc.record_signal_price(signal.thread_id, product)
+                                    except Exception as e:
+                                        logger.warning(f"Failed to record backtest price: {e}")
                                 
                                 return AIResponse(
                                     decision=TradeDecision(

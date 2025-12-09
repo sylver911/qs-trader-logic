@@ -37,14 +37,27 @@ class OrderTools:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "symbol": {
+                            "ticker": {
                                 "type": "string",
-                                "description": "Option symbol in format: 'TICKER YYMMDD[C/P]STRIKE' (e.g., 'SPY 241209C00605000' for SPY Dec 9 2024 $605 Call). Strike is in 8 digits with 3 decimal places implied.",
+                                "description": "Underlying ticker symbol (e.g., 'SPY', 'QQQ', 'TSLA')",
+                            },
+                            "expiry": {
+                                "type": "string",
+                                "description": "Option expiry date in YYYY-MM-DD format (e.g., '2024-12-09')",
+                            },
+                            "strike": {
+                                "type": "number",
+                                "description": "Strike price (e.g., 605.0)",
+                            },
+                            "direction": {
+                                "type": "string",
+                                "enum": ["CALL", "PUT"],
+                                "description": "Option direction - CALL or PUT",
                             },
                             "side": {
                                 "type": "string",
                                 "enum": ["BUY", "SELL"],
-                                "description": "Order side - BUY for calls/puts, SELL to close",
+                                "description": "Order side - BUY to open, SELL to close",
                             },
                             "quantity": {
                                 "type": "integer",
@@ -63,7 +76,7 @@ class OrderTools:
                                 "description": "Stop loss price",
                             },
                         },
-                        "required": ["symbol", "side", "quantity", "entry_price", "take_profit", "stop_loss"],
+                        "required": ["ticker", "expiry", "strike", "direction", "side", "quantity", "entry_price", "take_profit", "stop_loss"],
                     },
                 },
             },
@@ -71,7 +84,7 @@ class OrderTools:
                 "type": "function",
                 "function": {
                     "name": "skip_signal",
-                    "description": "Skip this signal and do not execute any trade. Use this when: (1) Signal has no actionable trade setup, (2) Market is closed, (3) Risk/reward is unfavorable, (4) Signal is just analysis without entry/target/stop, (5) Confidence is too low. ALWAYS call this tool when you decide not to trade - do not just output JSON.",
+                    "description": "Skip this signal and do not execute any trade. Use this when: (1) Signal has no actionable trade setup, (2) Market is closed, (3) Risk/reward is unfavorable, (4) Signal is just analysis without entry/target/stop, (5) Confidence is too low. ALWAYS call this tool when you decide not to trade - do not just output JSON. IMPORTANT: Always include the option details (ticker, expiry, strike, direction) so we can track signal quality for backtesting.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -84,8 +97,25 @@ class OrderTools:
                                 "enum": ["no_signal", "market_closed", "bad_rr", "low_confidence", "timing", "position_exists", "other"],
                                 "description": "Category of skip reason for analytics",
                             },
+                            "ticker": {
+                                "type": "string",
+                                "description": "Underlying ticker from the signal (e.g., 'SPY', 'QQQ', 'TSLA'). Required for backtesting.",
+                            },
+                            "expiry": {
+                                "type": "string",
+                                "description": "Option expiry date from the signal in YYYY-MM-DD format (e.g., '2024-12-09'). Required for backtesting.",
+                            },
+                            "strike": {
+                                "type": "number",
+                                "description": "Strike price from the signal (e.g., 605.0). Required for backtesting.",
+                            },
+                            "direction": {
+                                "type": "string",
+                                "enum": ["CALL", "PUT"],
+                                "description": "Option direction from the signal. Required for backtesting.",
+                            },
                         },
-                        "required": ["reason", "category"],
+                        "required": ["reason", "category", "ticker", "expiry", "strike", "direction"],
                     },
                 },
             },
@@ -98,17 +128,36 @@ class OrderTools:
             "skip_signal": self.skip_signal,
         }
 
-    def skip_signal(self, reason: str, category: str) -> Dict[str, Any]:
+    def skip_signal(
+        self, 
+        reason: str, 
+        category: str,
+        ticker: str = None,
+        expiry: str = None,
+        strike: float = None,
+        direction: str = None,
+    ) -> Dict[str, Any]:
         """Skip the signal - explicit tool call for AI to indicate no trade.
         
         This provides a clean way for AI to skip signals instead of outputting JSON directly.
         """
-        return {
+        result = {
             "action": "skip",
             "reason": reason,
             "category": category,
             "timestamp": datetime.now().isoformat(),
         }
+        
+        # Add product info for backtesting if provided
+        if ticker and expiry and strike and direction:
+            result["product"] = {
+                "ticker": ticker,
+                "expiry": expiry,
+                "strike": strike,
+                "direction": direction.upper() if direction else None,
+            }
+        
+        return result
 
     def _parse_option_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Parse OCC option symbol into components.
@@ -254,7 +303,10 @@ class OrderTools:
 
     def place_bracket_order(
         self,
-        symbol: str,
+        ticker: str,
+        expiry: str,
+        strike: float,
+        direction: str,
         side: str,
         quantity: int,
         entry_price: float,
@@ -268,6 +320,10 @@ class OrderTools:
         2. Take profit order (limit, OCA with stop)
         3. Stop loss order (stop, OCA with TP)
         """
+        # Build OCC symbol from components
+        # Format: TICKER YYMMDD[C/P]STRIKE (e.g., SPY 241209C00605000)
+        symbol = self._build_occ_symbol(ticker, expiry, strike, direction)
+        
         conid, error = self._get_conid(symbol)
         if not conid:
             return {
@@ -290,6 +346,12 @@ class OrderTools:
             "order": result,
             "conid": conid,
             "symbol": symbol,
+            "product": {
+                "ticker": ticker,
+                "expiry": expiry,
+                "strike": strike,
+                "direction": direction.upper() if direction else None,
+            },
             "side": side,
             "quantity": quantity,
             "entry_price": entry_price,
@@ -298,3 +360,23 @@ class OrderTools:
             "order_type": "BRACKET",
             "timestamp": datetime.now().isoformat(),
         }
+    
+    def _build_occ_symbol(self, ticker: str, expiry: str, strike: float, direction: str) -> str:
+        """Build OCC option symbol from components.
+        
+        Format: TICKER YYMMDD[C/P]STRIKE
+        Example: SPY 241209C00605000 (SPY Dec 9 2024 $605 Call)
+        """
+        # Parse expiry (YYYY-MM-DD) to YYMMDD
+        from datetime import datetime as dt
+        exp_date = dt.strptime(expiry, "%Y-%m-%d")
+        exp_str = exp_date.strftime("%y%m%d")
+        
+        # Direction: C or P
+        dir_char = "C" if direction.upper() == "CALL" else "P"
+        
+        # Strike: 8 digits with 3 implied decimals (605.0 -> 00605000)
+        strike_int = int(strike * 1000)
+        strike_str = f"{strike_int:08d}"
+        
+        return f"{ticker.upper()} {exp_str}{dir_char}{strike_str}"
