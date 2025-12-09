@@ -224,6 +224,13 @@ class IBKRBroker:
         """
         try:
             client = self._get_client()
+            
+            # IMPORTANT: Pre-flight request required by IBKR API before placing orders
+            try:
+                client.receive_brokerage_accounts()
+                logger.debug("Pre-flight brokerage accounts call successful")
+            except Exception as e:
+                logger.warning(f"Pre-flight brokerage accounts call failed: {e}")
 
             order_request = make_order_request(
                 conid=conid,
@@ -282,6 +289,15 @@ class IBKRBroker:
         """
         try:
             client = self._get_client()
+            
+            # IMPORTANT: Pre-flight request required by IBKR API before placing orders
+            # Without this, orders may be accepted but not actually submitted to the exchange
+            try:
+                client.receive_brokerage_accounts()
+                logger.debug("Pre-flight brokerage accounts call successful")
+            except Exception as e:
+                logger.warning(f"Pre-flight brokerage accounts call failed: {e}")
+                # Continue anyway - the order might still work
 
             # Unique IDs for order linkage
             timestamp = int(time.time())
