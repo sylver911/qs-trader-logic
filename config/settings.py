@@ -17,7 +17,10 @@ class Settings:
     # Redis
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     QUEUE_KEY: str = "queue:threads:pending"
-    PROCESSING_KEY: str = "queue:threads:processing"
+    PROCESSING_KEY: str = "queue:threads:processing"  # LIST (full task JSON)
+    COMPLETED_KEY: str = "queue:threads:completed"
+    FAILED_KEY: str = "queue:threads:failed"
+    DEAD_LETTER_KEY: str = "queue:threads:dead_letter"
     CONFIG_PREFIX: str = "config:trading:"
 
     # LiteLLM
