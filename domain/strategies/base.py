@@ -51,12 +51,12 @@ class Strategy(ABC):
     forum_id: Optional[str] = None  # Exact match by ID
     forum_name_pattern: Optional[str] = None  # Regex pattern for forum name
 
-    # Strategy configuration
-    config: StrategyConfig = field(default_factory=StrategyConfig)
+    # Strategy configuration (set in __init__ or subclass)
+    config: StrategyConfig = None
 
     def __init__(self):
         """Initialize strategy with default config."""
-        if not hasattr(self, 'config') or self.config is None:
+        if self.config is None:
             self.config = StrategyConfig()
 
     def matches(self, signal: Signal) -> bool:
