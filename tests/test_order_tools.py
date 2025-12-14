@@ -60,29 +60,6 @@ class TestOrderTools:
         assert result["category"] == "market_closed"
         assert "timestamp" in result
 
-    def test_skip_signal_with_product(self):
-        """Skip signal should include product info for backtesting."""
-        mock_broker = MagicMock()
-        tools = OrderTools(broker=mock_broker)
-
-        result = tools.skip_signal(
-            reason="R:R below 1.5",
-            category="bad_rr",
-            ticker="SPY",
-            expiry="2024-12-09",
-            strike=605.0,
-            direction="CALL"
-        )
-
-        assert result["action"] == "skip"
-        assert result["reason"] == "R:R below 1.5"
-        assert result["category"] == "bad_rr"
-        assert "product" in result
-        assert result["product"]["ticker"] == "SPY"
-        assert result["product"]["expiry"] == "2024-12-09"
-        assert result["product"]["strike"] == 605.0
-        assert result["product"]["direction"] == "CALL"
-
 
 class TestOptionSymbolParsing:
     """Test option symbol parsing."""

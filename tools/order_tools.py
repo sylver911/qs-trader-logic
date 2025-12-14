@@ -84,7 +84,7 @@ class OrderTools:
                 "type": "function",
                 "function": {
                     "name": "skip_signal",
-                    "description": "Skip this signal and do not execute any trade. Use this when: (1) Signal has no actionable trade setup, (2) Market is closed, (3) Risk/reward is unfavorable, (4) Signal is just analysis without entry/target/stop, (5) Confidence is too low. ALWAYS call this tool when you decide not to trade - do not just output JSON. IMPORTANT: Always include the option details (ticker, expiry, strike, direction) so we can track signal quality for backtesting.",
+                    "description": "Skip this signal and do not execute any trade. Use this when: (1) Signal has no actionable trade setup, (2) Market is closed, (3) Risk/reward is unfavorable, (4) Signal is just analysis without entry/target/stop, (5) Confidence is too low. ALWAYS call this tool when you decide not to trade - do not just output JSON.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -97,25 +97,8 @@ class OrderTools:
                                 "enum": ["no_signal", "market_closed", "bad_rr", "low_confidence", "timing", "position_exists", "other"],
                                 "description": "Category of skip reason for analytics",
                             },
-                            "ticker": {
-                                "type": "string",
-                                "description": "Underlying ticker from the signal (e.g., 'SPY', 'QQQ', 'TSLA'). Required for backtesting.",
-                            },
-                            "expiry": {
-                                "type": "string",
-                                "description": "Option expiry date from the signal in YYYY-MM-DD format (e.g., '2024-12-09'). Required for backtesting.",
-                            },
-                            "strike": {
-                                "type": "number",
-                                "description": "Strike price from the signal (e.g., 605.0). Required for backtesting.",
-                            },
-                            "direction": {
-                                "type": "string",
-                                "enum": ["CALL", "PUT"],
-                                "description": "Option direction from the signal. Required for backtesting.",
-                            },
                         },
-                        "required": ["reason", "category", "ticker", "expiry", "strike", "direction"],
+                        "required": ["reason", "category"],
                     },
                 },
             },
@@ -128,34 +111,14 @@ class OrderTools:
             "skip_signal": self.skip_signal,
         }
 
-    def skip_signal(
-        self, 
-        reason: str, 
-        category: str,
-        ticker: str = None,
-        expiry: str = None,
-        strike: float = None,
-        direction: str = None,
-    ) -> Dict[str, Any]:
-        """Skip the signal - explicit tool call for AI to indicate no trade.
-        
-        This provides a clean way for AI to skip signals instead of outputting JSON directly.
-        """
+    def skip_signal(self, reason: str, category: str) -> Dict[str, Any]:
+        """Skip the signal - explicit tool call for AI to indicate no trade."""
         result = {
             "action": "skip",
             "reason": reason,
             "category": category,
             "timestamp": datetime.now().isoformat(),
         }
-        
-        # Add product info for backtesting if provided
-        if ticker and expiry and strike and direction:
-            result["product"] = {
-                "ticker": ticker,
-                "expiry": expiry,
-                "strike": strike,
-                "direction": direction.upper() if direction else None,
-            }
         
         return result
 

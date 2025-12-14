@@ -8,6 +8,7 @@
 2. **Decision Tools Only**: AI csak 3 tool-t lát (skip, execute, delay)
 3. **Preconditions Module**: Discord cog-szerű moduláris validáció
 4. **Prefetch Always**: Mindig prefetch, konfig eltávolítva
+5. **Redis Reliable Queue**: BRPOPLPUSH atomic move, dead letter queue
 
 ---
 
@@ -36,11 +37,9 @@ Signal → Preconditions → Prefetch Data → LLM → Decision Tool → Done
 
 | Tool | Action | Paraméterek |
 |------|--------|-------------|
-| `skip_signal` | SKIP | reason, category, ticker, expiry, strike, direction |
+| `skip_signal` | SKIP | reason, category |
 | `place_bracket_order` | EXECUTE | ticker, expiry, strike, direction, side, quantity, entry_price, take_profit, stop_loss |
-| `schedule_reanalysis` | DELAY | delay_minutes, reason, question, ticker, expiry, strike, direction, key_levels |
-
-Minden tool visszaadja a `product` dict-et backtest-hez.
+| `schedule_reanalysis` | DELAY | delay_minutes, reason, question, key_levels |
 
 ## Preconditions (Discord Cog Pattern)
 
@@ -71,12 +70,35 @@ Data tool-ok eredményei bekerülnek a prompt-ba:
 - `get_account_summary()` → cash, buying power
 - `get_positions()` → nyitott pozíciók
 
-## Backtest Integráció
+## Redis Queue (Reliable Pattern)
 
-1. Decision tool → `product` dict
-2. `backtest_service.record_signal_price()` → yfinance
-3. MongoDB: `thread.backtest.signal_price`
-4. EOD job → `thread.backtest.eod_price`
+```
+queue:threads:pending     → LIST (tasks várakoznak)
+queue:threads:processing  → LIST (feldolgozás alatt, full JSON)
+queue:threads:completed   → SET (kész thread_id-k)
+queue:threads:failed      → HASH (hiba info)
+queue:threads:dead_letter → LIST (invalid/unparseable)
+queue:scheduled           → ZSET (delayed reanalysis)
+```
+
+**Atomic move**: `BRPOPLPUSH pending → processing`
+
+## MongoDB (discord_threads)
+
+```javascript
+{
+  "thread_id": "abc123",
+  "ai_processed": true,
+  "ai_processed_at": "2024-12-14T10:30:00",
+  "trace_id": "langfuse-trace-id",
+  "ai_result": {
+    "act": "execute" | "skip" | "schedule",
+    "reasoning": "...",
+    "decision": { ... },
+    "trade_result": { ... }
+  }
+}
+```
 
 ## Projekt Struktúra
 
@@ -93,7 +115,6 @@ qs-trading-logic/
 │   │   └── position.py
 │   ├── services/
 │   │   ├── trading_service.py    # Fő orchestráció
-│   │   ├── backtest_service.py   # yfinance wrapper
 │   │   └── order_monitor.py      # P&L tracking
 │   └── preconditions/            # Moduláris validáció
 │       ├── __init__.py
@@ -102,20 +123,19 @@ qs-trading-logic/
 ├── infrastructure/
 │   ├── ai/llm_client.py          # Single LLM call
 │   ├── broker/ibkr_client.py
+│   ├── storage/mongo.py          # MongoHandler
 │   ├── prompts/prompt_service.py
-│   └── queue/redis_consumer.py
+│   └── queue/redis_consumer.py   # Reliable queue
 ├── tools/
 │   ├── market_tools.py           # Data tools (prefetch)
 │   ├── portfolio_tools.py        # Data tools (prefetch)
 │   ├── order_tools.py            # skip_signal, place_bracket_order
 │   └── schedule_tools.py         # schedule_reanalysis
 └── tests/
-    └── test_analyze_with_ai.py   # Decision tools tesztek
 ```
 
 ## Kapcsolódó Projektek
 
-- `qs-eod-backtest`: EOD backtest cron job
 - `dashboard`: Django monitoring UI
 - `qs-discord-chat-exporter`: Discord scraper
 

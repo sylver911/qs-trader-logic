@@ -53,9 +53,7 @@ DO NOT USE WHEN:
 - You've already reanalyzed this signal twice (check retry_count)
 
 The signal will be automatically reanalyzed after the specified delay with fresh market data.
-You will receive the previous analysis context when reanalyzing.
-
-IMPORTANT: Always include the option details (ticker, expiry, strike, direction) so we can track signal quality for backtesting.""",
+You will receive the previous analysis context when reanalyzing.""",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -71,23 +69,6 @@ IMPORTANT: Always include the option details (ticker, expiry, strike, direction)
                                 "type": "string",
                                 "description": "Question to answer when reanalyzing (e.g., 'Has the market reacted to PCE? Is the short entry still valid?')"
                             },
-                            "ticker": {
-                                "type": "string",
-                                "description": "Underlying ticker from the signal (e.g., 'SPY', 'QQQ', 'TSLA'). Required for backtesting."
-                            },
-                            "expiry": {
-                                "type": "string",
-                                "description": "Option expiry date from the signal in YYYY-MM-DD format (e.g., '2024-12-09'). Required for backtesting."
-                            },
-                            "strike": {
-                                "type": "number",
-                                "description": "Strike price from the signal (e.g., 605.0). Required for backtesting."
-                            },
-                            "direction": {
-                                "type": "string",
-                                "enum": ["CALL", "PUT"],
-                                "description": "Option direction from the signal. Required for backtesting."
-                            },
                             "key_levels": {
                                 "type": "object",
                                 "description": "Key price levels to check on reanalysis",
@@ -99,7 +80,7 @@ IMPORTANT: Always include the option details (ticker, expiry, strike, direction)
                                 }
                             }
                         },
-                        "required": ["delay_minutes", "reason", "question", "ticker", "expiry", "strike", "direction"]
+                        "required": ["delay_minutes", "reason", "question"]
                     }
                 }
             }
@@ -116,10 +97,6 @@ IMPORTANT: Always include the option details (ticker, expiry, strike, direction)
         delay_minutes: int,
         reason: str,
         question: str,
-        ticker: str = None,
-        expiry: str = None,
-        strike: float = None,
-        direction: str = None,
         key_levels: Dict[str, float] = None,
         # These are injected by TradingService
         _thread_id: str = None,
@@ -129,22 +106,18 @@ IMPORTANT: Always include the option details (ticker, expiry, strike, direction)
         _signal_data: Dict = None,
     ) -> Dict[str, Any]:
         """Schedule signal for delayed reanalysis.
-        
+
         Args:
             delay_minutes: Minutes to wait before reanalysis (5-240)
             reason: Why scheduling delay
             question: Question to answer on reanalysis
-            ticker: Underlying ticker for backtesting
-            expiry: Option expiry date for backtesting
-            strike: Strike price for backtesting
-            direction: CALL/PUT for backtesting
             key_levels: Key price levels to check
             _thread_id: Injected by TradingService
             _thread_name: Injected by TradingService
             _previous_tools: Tool calls made so far
             _retry_count: Current retry count
             _signal_data: Original signal data
-        
+
         Returns:
             Result dict with scheduling status
         """
@@ -228,7 +201,7 @@ IMPORTANT: Always include the option details (ticker, expiry, strike, direction)
             
             logger.info(f"Scheduled reanalysis for {_thread_id} in {delay_minutes} min (at {reanalyze_time.strftime('%H:%M')})")
             
-            result = {
+            return {
                 "success": True,
                 "scheduled": True,
                 "delay_minutes": delay_minutes,
@@ -238,17 +211,6 @@ IMPORTANT: Always include the option details (ticker, expiry, strike, direction)
                 "retry_count": _retry_count + 1,
                 "message": f"Signal scheduled for reanalysis in {delay_minutes} minutes. Will check: {question}"
             }
-            
-            # Add product info for backtesting if provided
-            if ticker and expiry and strike and direction:
-                result["product"] = {
-                    "ticker": ticker,
-                    "expiry": expiry,
-                    "strike": strike,
-                    "direction": direction.upper() if direction else None,
-                }
-            
-            return result
             
         except Exception as e:
             logger.error(f"Failed to schedule reanalysis: {e}")

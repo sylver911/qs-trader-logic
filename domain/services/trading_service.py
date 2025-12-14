@@ -339,16 +339,6 @@ class TradingService:
                 trace_id=trace_id,
             )
 
-        # Record backtest price for all decision tools
-        product = tool_result.get("product")
-        if product:
-            try:
-                from domain.services.backtest_service import get_backtest_service
-                backtest_svc = get_backtest_service()
-                backtest_svc.record_signal_price(signal.thread_id, product)
-            except Exception as e:
-                logger.warning(f"Failed to record backtest price: {e}")
-
         # Handle each decision tool type
         if func_name == "schedule_reanalysis":
             logger.info(f"   ⏰ AI scheduled reanalysis: {tool_result.get('reason', 'N/A')}")
