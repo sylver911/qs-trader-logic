@@ -1,4 +1,8 @@
-"""Preconditions module - Discord cog-style validation checks."""
+"""Preconditions module - Discord cog-style validation checks.
+
+Note: Ticker whitelist/blacklist checks have been moved to Strategy.pre_check().
+Each strategy now has its own whitelist/blacklist in StrategyConfig.
+"""
 
 import logging
 from typing import Any, Dict, List, Optional
@@ -7,8 +11,6 @@ from domain.models.signal import Signal
 from domain.preconditions.base import Precondition
 from domain.preconditions.emergency_stop import EmergencyStopPrecondition
 from domain.preconditions.ticker_required import TickerRequiredPrecondition
-from domain.preconditions.ticker_whitelist import TickerWhitelistPrecondition
-from domain.preconditions.ticker_blacklist import TickerBlacklistPrecondition
 from domain.preconditions.signal_confidence import SignalConfidencePrecondition
 from domain.preconditions.vix_level import VixLevelPrecondition
 from domain.preconditions.max_positions import MaxPositionsPrecondition
@@ -18,15 +20,17 @@ logger = logging.getLogger(__name__)
 
 
 class PreconditionManager:
-    """Manages and runs all preconditions in order."""
+    """Manages and runs all preconditions in order.
+
+    Global preconditions that apply to ALL forums regardless of strategy.
+    Forum-specific checks (like ticker whitelist) are handled by Strategy.pre_check().
+    """
 
     def __init__(self):
         """Initialize with all preconditions in execution order."""
         self._preconditions: List[Precondition] = [
             EmergencyStopPrecondition(),
             TickerRequiredPrecondition(),
-            TickerWhitelistPrecondition(),
-            TickerBlacklistPrecondition(),
             SignalConfidencePrecondition(),
             VixLevelPrecondition(),
             MaxPositionsPrecondition(),

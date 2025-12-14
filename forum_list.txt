@@ -1,0 +1,79 @@
+orum	Scraping	Execution	Threads	Processed	Executed
+📰live-news-signals
+1392947656837562450
+		-	-	-
+🤖live-unusual-options
+1381222105529450566
+		-	-	-
+💥live-small-options
+1419885141454753813
+		80	60	-
+🎲live-wsb-signals
+1392117684656799824
+		76	56	-
+📈live-short-squeeze-signals
+1434390722542567437
+		11	9	-
+💎live-sp-inclusion-signals
+1434391229713612900
+		-	-	-
+👩‍💼live-insider-signals
+1436251132744831017
+		-	-	-
+🕶️live-darkpool-signals
+1436251327062872115
+		-	-	-
+💵live-credit-spread-signals
+1427565217151193230
+		-	-	-
+🏛️live-whitehouse-signals
+1405094188076372019
+		-	-	-
+🎰live-kline-signals
+1412620062346444810
+		512	225	-
+🎰live-kline-crypto-signals
+1419027708989542480
+		-	-	-
+⏰live-0dte-signals
+1373531558274666496
+		265	110	2
+📅live-weekly-signals
+1373533175724376197
+		199	29	-
+💸live-earning-signals
+1373533516431884398
+		-	-	-
+🔄live-swing-signals
+1373533328631922729
+		-	-	-
+💼live-stocks-signals
+1373533551772831764
+		-	-	-
+⌛live-leap-signals
+1373533391361937478
+		-	-	-
+💣live-vol-signals
+1408844438192652328
+		-	-	-
+🚀live-ipo-signals
+1402524542504665138
+		-	-	-
+🧈live-options-spread-signals
+1378202161896493189
+		8	5	-
+🧇live-delta-neutral-signals
+1378202249699922011
+		-	-	-
+🦔live-covered-call-signals
+1403125945367269426
+		-	-	-
+🪙live-crypto-signals
+1373533466276270081
+		-	-	-
+🛢live-futures-signals
+1373533427940200500
+		-	-	-
+💹live-forex-signals
+1376805441274646539
+		-	-	-
