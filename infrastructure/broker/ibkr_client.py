@@ -347,6 +347,9 @@ class IBKRBroker:
 
             answers = {"confirmed": True}
 
+            logger.debug(f"Sending {len(orders)} orders to IBKR API...")
+            logger.debug(f"Order requests: {orders}")
+
             result = client.place_order(
                 order_request=orders,
                 answers=answers,
@@ -357,6 +360,21 @@ class IBKRBroker:
                 f"Bracket order placed: {side} {quantity} @ {entry_price}, "
                 f"TP: {take_profit}, SL: {stop_loss}, OCA: {oca_group}"
             )
+            logger.debug(f"IBKR API response: {result}")
+            logger.debug(f"IBKR API response.data: {result.data}")
+
+            # Check if response contains error messages
+            if result.data:
+                if isinstance(result.data, list):
+                    for order_resp in result.data:
+                        if isinstance(order_resp, dict):
+                            if order_resp.get("error"):
+                                logger.error(f"IBKR order error: {order_resp.get('error')}")
+                            if order_resp.get("message"):
+                                logger.warning(f"IBKR order message: {order_resp.get('message')}")
+                            if order_resp.get("order_id"):
+                                logger.info(f"Order ID created: {order_resp.get('order_id')}")
+
             return result.data
 
         except Exception as e:

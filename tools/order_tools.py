@@ -323,14 +323,20 @@ class OrderTools:
         # Build OCC symbol from components
         # Format: TICKER YYMMDD[C/P]STRIKE (e.g., SPY 241209C00605000)
         symbol = self._build_occ_symbol(ticker, expiry, strike, direction)
-        
+        logger.info(f"Built OCC symbol: {symbol}")
+
         conid, error = self._get_conid(symbol)
+        logger.info(f"Contract lookup: conid={conid}, error={error}")
+
         if not conid:
             return {
                 "success": False,
                 "error": error or f"Contract not found for {symbol}",
                 "timestamp": datetime.now().isoformat(),
             }
+
+        logger.info(f"Placing bracket order: conid={conid}, side={side}, qty={quantity}")
+        logger.info(f"  Entry: ${entry_price}, TP: ${take_profit}, SL: ${stop_loss}")
 
         result = self._broker.place_bracket_order(
             conid=conid,
@@ -341,8 +347,25 @@ class OrderTools:
             stop_loss=stop_loss,
         )
 
+        logger.info(f"Bracket order result: {result}")
+
+        # Check for actual success - result should contain order IDs
+        success = False
+        if result is not None:
+            if isinstance(result, list) and len(result) > 0:
+                # Should be list of 3 orders (parent + TP + SL)
+                success = True
+                logger.info(f"  ✅ Order placed successfully: {len(result)} orders created")
+            elif isinstance(result, dict) and result.get("order_id"):
+                success = True
+                logger.info(f"  ✅ Order placed successfully: order_id={result.get('order_id')}")
+            else:
+                logger.warning(f"  ⚠️ Unexpected result format: {type(result)}")
+        else:
+            logger.error("  ❌ Order placement returned None")
+
         return {
-            "success": result is not None,
+            "success": success,
             "order": result,
             "conid": conid,
             "symbol": symbol,
