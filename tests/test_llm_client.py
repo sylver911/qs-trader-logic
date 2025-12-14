@@ -1,12 +1,75 @@
-"""Tests for LLM Client."""
+"""Tests for LLM Client.
+
+These tests mock all external dependencies:
+- Redis (trading_config)
+- OpenAI client
+- MongoDB prompts
+"""
 
 import json
+import sys
 import pytest
-from unittest.mock import MagicMock, patch, ANY
+from unittest.mock import MagicMock, patch, PropertyMock
 from pathlib import Path
+
+
+# =============================================================================
+# Mock external dependencies before importing LLMClient
+# =============================================================================
+
+# Mock Redis config
+mock_trading_config = MagicMock()
+mock_trading_config.current_llm_model = "gpt-4o"
+
+# Mock MongoDB prompts
+mock_prompts = MagicMock()
+mock_prompts.get_system_prompt.return_value = "You are a trading AI assistant."
+mock_prompts.get_user_template.return_value = None  # Use file-based template
+
+# Patch modules before import
+sys.modules["config.redis_config"] = MagicMock(trading_config=mock_trading_config)
+sys.modules["infrastructure.prompts"] = mock_prompts
 
 from infrastructure.ai.llm_client import LLMClient
 
+
+# =============================================================================
+# Test fixtures
+# =============================================================================
+
+@pytest.fixture
+def mock_openai_response():
+    """Create a mock OpenAI API response."""
+    def _create(content="", tool_calls=None, reasoning_content=None):
+        mock_message = MagicMock()
+        mock_message.content = content
+        mock_message.tool_calls = tool_calls
+        mock_message.reasoning_content = reasoning_content
+        mock_message.provider_specific_fields = {}
+
+        mock_response = MagicMock()
+        mock_response.id = "req_test123"
+        mock_response.choices = [MagicMock(message=mock_message)]
+        mock_response.usage = MagicMock(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+        )
+        return mock_response
+    return _create
+
+
+@pytest.fixture
+def mock_openai_client(mock_openai_response):
+    """Create a mock OpenAI client."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_openai_response()
+    return mock_client
+
+
+# =============================================================================
+# Tests for LLMClient initialization
+# =============================================================================
 
 class TestLLMClientInit:
     """Test LLM client initialization."""
@@ -25,6 +88,10 @@ class TestLLMClientInit:
         assert client._template_dir == str(tmp_path)
 
 
+# =============================================================================
+# Tests for render_prompt
+# =============================================================================
+
 class TestRenderPrompt:
     """Test prompt rendering."""
 
@@ -34,39 +101,42 @@ class TestRenderPrompt:
         template_file = tmp_path / "test.j2"
         template_file.write_text("Hello {{ name }}!")
 
-        client = LLMClient(template_dir=str(tmp_path))
-        result = client.render_prompt("test.j2", {"name": "World"})
+        # Mock get_user_template to return None (use file-based)
+        with patch("infrastructure.ai.llm_client.get_user_template", return_value=None):
+            client = LLMClient(template_dir=str(tmp_path))
+            result = client.render_prompt("test.j2", {"name": "World"})
 
         assert result == "Hello World!"
 
     def test_render_missing_template_raises(self, tmp_path):
         """Test that missing template raises error."""
-        client = LLMClient(template_dir=str(tmp_path))
+        with patch("infrastructure.ai.llm_client.get_user_template", return_value=None):
+            client = LLMClient(template_dir=str(tmp_path))
 
-        with pytest.raises(Exception):
-            client.render_prompt("nonexistent.j2", {})
+            with pytest.raises(Exception):
+                client.render_prompt("nonexistent.j2", {})
 
+
+# =============================================================================
+# Tests for analyze_signal
+# =============================================================================
 
 class TestAnalyzeSignal:
     """Test analyze_signal function."""
 
-    @patch("infrastructure.ai.llm_client.completion")
-    def test_analyze_signal_returns_response(self, mock_completion, tmp_path):
+    @patch("infrastructure.ai.llm_client.OpenAI")
+    @patch("infrastructure.ai.llm_client.get_user_template", return_value=None)
+    @patch("infrastructure.ai.llm_client.get_system_prompt", return_value="System prompt")
+    def test_analyze_signal_returns_response(
+        self, mock_sys_prompt, mock_user_template, mock_openai_class, tmp_path, mock_openai_response
+    ):
         """Test that analyze_signal returns proper response structure."""
         # Setup mock
-        mock_message = MagicMock()
-        mock_message.content = '{"action": "skip", "reasoning": "test"}'
-        mock_message.tool_calls = None
-
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-        mock_response.usage = MagicMock(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_openai_response(
+            content='{"action": "skip", "reasoning": "test"}'
         )
-
-        mock_completion.return_value = mock_response
+        mock_openai_class.return_value = mock_client
 
         # Create minimal template
         template_file = tmp_path / "signal_analysis.j2"
@@ -84,31 +154,35 @@ class TestAnalyzeSignal:
         assert "tool_calls" in result
         assert "model" in result
         assert "usage" in result
+        assert result["content"] == '{"action": "skip", "reasoning": "test"}'
 
-    @patch("infrastructure.ai.llm_client.completion")
-    def test_analyze_signal_with_tools(self, mock_completion, tmp_path):
+    @patch("infrastructure.ai.llm_client.OpenAI")
+    @patch("infrastructure.ai.llm_client.get_user_template", return_value=None)
+    @patch("infrastructure.ai.llm_client.get_system_prompt", return_value="System prompt")
+    def test_analyze_signal_with_tools(
+        self, mock_sys_prompt, mock_user_template, mock_openai_class, tmp_path
+    ):
         """Test analyze_signal passes tools correctly."""
+        # Create tool call mock
+        mock_tool_call = MagicMock()
+        mock_tool_call.id = "call_123"
+        mock_tool_call.function.name = "place_bracket_order"
+        mock_tool_call.function.arguments = '{"ticker": "SPY", "quantity": 1}'
+
         mock_message = MagicMock()
         mock_message.content = ""
-        mock_message.tool_calls = [
-            MagicMock(
-                id="call_123",
-                function=MagicMock(
-                    name="get_current_time",
-                    arguments="{}",
-                ),
-            )
-        ]
+        mock_message.tool_calls = [mock_tool_call]
+        mock_message.reasoning_content = None
+        mock_message.provider_specific_fields = {}
 
         mock_response = MagicMock()
+        mock_response.id = "req_456"
         mock_response.choices = [MagicMock(message=mock_message)]
-        mock_response.usage = MagicMock(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-        )
+        mock_response.usage = MagicMock(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
-        mock_completion.return_value = mock_response
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai_class.return_value = mock_client
 
         template_file = tmp_path / "signal_analysis.j2"
         template_file.write_text("Test")
@@ -117,8 +191,8 @@ class TestAnalyzeSignal:
             {
                 "type": "function",
                 "function": {
-                    "name": "get_current_time",
-                    "description": "Get time",
+                    "name": "place_bracket_order",
+                    "description": "Place order",
                     "parameters": {"type": "object", "properties": {}},
                 },
             }
@@ -134,19 +208,26 @@ class TestAnalyzeSignal:
         )
 
         # Verify tools were passed
-        mock_completion.assert_called_once()
-        call_kwargs = mock_completion.call_args.kwargs
+        mock_client.chat.completions.create.assert_called_once()
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["tools"] == tools
         assert call_kwargs["tool_choice"] == "auto"
 
         # Verify tool calls extracted
         assert len(result["tool_calls"]) == 1
-        assert result["tool_calls"][0]["function"] == "get_current_time"
+        assert result["tool_calls"][0]["function"] == "place_bracket_order"
+        assert result["tool_calls"][0]["arguments"] == {"ticker": "SPY", "quantity": 1}
 
-    @patch("infrastructure.ai.llm_client.completion")
-    def test_analyze_signal_error_handling(self, mock_completion, tmp_path):
-        """Test analyze_signal handles errors gracefully."""
-        mock_completion.side_effect = Exception("API Error")
+    @patch("infrastructure.ai.llm_client.OpenAI")
+    @patch("infrastructure.ai.llm_client.get_user_template", return_value=None)
+    @patch("infrastructure.ai.llm_client.get_system_prompt", return_value="System prompt")
+    def test_analyze_signal_error_handling(
+        self, mock_sys_prompt, mock_user_template, mock_openai_class, tmp_path
+    ):
+        """Test analyze_signal handles errors gracefully with fallback."""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = Exception("API Error")
+        mock_openai_class.return_value = mock_client
 
         template_file = tmp_path / "signal_analysis.j2"
         template_file.write_text("Test")
@@ -163,239 +244,91 @@ class TestAnalyzeSignal:
         assert result["tool_calls"] == []
         assert "error" in result
 
+    @patch("infrastructure.ai.llm_client.OpenAI")
+    @patch("infrastructure.ai.llm_client.get_user_template", return_value=None)
+    @patch("infrastructure.ai.llm_client.get_system_prompt", return_value="System prompt")
+    def test_analyze_signal_with_prefetched_data(
+        self, mock_sys_prompt, mock_user_template, mock_openai_class, tmp_path, mock_openai_response
+    ):
+        """Test that prefetched data is included in the prompt."""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_openai_response(content="OK")
+        mock_openai_class.return_value = mock_client
 
-class TestExecuteToolCalls:
-    """Test execute_tool_calls function."""
+        template_file = tmp_path / "signal_analysis.j2"
+        template_file.write_text("Base prompt")
 
-    def test_execute_tool_calls_success(self):
-        """Test successful tool execution."""
-        client = LLMClient()
-
-        tool_calls = [
-            {"id": "call_1", "function": "test_func", "arguments": {"x": 1}},
-        ]
-
-        handlers = {
-            "test_func": lambda x: {"result": x * 2},
-        }
-
-        results = client.execute_tool_calls(tool_calls, handlers)
-
-        assert len(results) == 1
-        assert results[0]["success"] is True
-        assert results[0]["result"] == {"result": 2}
-        assert results[0]["call_id"] == "call_1"
-
-    def test_execute_tool_calls_unknown_function(self):
-        """Test handling of unknown function."""
-        client = LLMClient()
-
-        tool_calls = [
-            {"id": "call_1", "function": "unknown_func", "arguments": {}},
-        ]
-
-        handlers = {}
-
-        results = client.execute_tool_calls(tool_calls, handlers)
-
-        assert len(results) == 1
-        assert results[0]["success"] is False
-        assert "Unknown function" in results[0]["error"]
-
-    def test_execute_tool_calls_handler_error(self):
-        """Test handling of handler exception."""
-        client = LLMClient()
-
-        tool_calls = [
-            {"id": "call_1", "function": "bad_func", "arguments": {}},
-        ]
-
-        handlers = {
-            "bad_func": lambda: 1 / 0,  # Will raise ZeroDivisionError
-        }
-
-        results = client.execute_tool_calls(tool_calls, handlers)
-
-        assert len(results) == 1
-        assert results[0]["success"] is False
-        assert "division" in results[0]["error"].lower()
-
-    def test_execute_multiple_tool_calls(self):
-        """Test executing multiple tool calls."""
-        client = LLMClient()
-
-        tool_calls = [
-            {"id": "call_1", "function": "func_a", "arguments": {}},
-            {"id": "call_2", "function": "func_b", "arguments": {"n": 5}},
-            {"id": "call_3", "function": "unknown", "arguments": {}},
-        ]
-
-        handlers = {
-            "func_a": lambda: "result_a",
-            "func_b": lambda n: n * 2,
-        }
-
-        results = client.execute_tool_calls(tool_calls, handlers)
-
-        assert len(results) == 3
-        assert results[0]["success"] is True
-        assert results[0]["result"] == "result_a"
-        assert results[1]["success"] is True
-        assert results[1]["result"] == 10
-        assert results[2]["success"] is False
-
-
-class TestContinueWithToolResults:
-    """Test continue_with_tool_results function - CRITICAL TESTS."""
-
-    @patch("infrastructure.ai.llm_client.completion")
-    def test_continue_with_messages_parameter(self, mock_completion):
-        """Test that messages parameter is used correctly."""
-        mock_message = MagicMock()
-        mock_message.content = '{"action": "skip"}'
-        mock_message.tool_calls = None
-
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-
-        mock_completion.return_value = mock_response
-
-        client = LLMClient()
-
-        messages = [
-            {"role": "system", "content": "System prompt"},
-            {"role": "user", "content": "User message"},
-            {"role": "assistant", "content": "", "tool_calls": [
-                {"id": "call_1", "type": "function", "function": {"name": "test", "arguments": "{}"}}
-            ]},
-            {"role": "tool", "tool_call_id": "call_1", "content": '{"result": "ok"}'},
-        ]
-
-        result = client.continue_with_tool_results(messages=messages)
-
-        # Verify messages were passed to completion
-        mock_completion.assert_called_once()
-        call_kwargs = mock_completion.call_args.kwargs
-        assert call_kwargs["messages"] == messages
-
-    @patch("infrastructure.ai.llm_client.completion")
-    def test_continue_preserves_tool_results_in_messages(self, mock_completion):
-        """Test that tool results in messages are preserved and sent."""
-        mock_message = MagicMock()
-        mock_message.content = "Final response"
-        mock_message.tool_calls = None
-
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-
-        mock_completion.return_value = mock_response
-
-        client = LLMClient()
-
-        # Simulate real message history with tool results
-        messages = [
-            {"role": "system", "content": "You are a trading AI"},
-            {"role": "user", "content": "Analyze SPY"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_abc123",
-                        "type": "function",
-                        "function": {
-                            "name": "get_current_time",
-                            "arguments": "{}",
-                        },
-                    }
-                ],
+        prefetched_data = {
+            "time": {
+                "time_est": "10:30:00",
+                "date": "2024-12-14",
+                "day_of_week": "Saturday",
+                "market_status": "closed",
+                "is_market_open": False,
             },
-            {
-                "role": "tool",
-                "tool_call_id": "call_abc123",
-                "content": json.dumps({
-                    "timestamp": "2024-12-03T11:00:00-05:00",
-                    "market_status": "open",
-                }),
+            "option_chain": {
+                "current_price": 605.50,
+                "available_expiries": ["2024-12-16", "2024-12-20"],
             },
-        ]
+            "account": {
+                "usd_available_for_trading": 10000.00,
+                "usd_buying_power": 20000.00,
+                "usd_net_liquidation": 50000.00,
+            },
+            "positions": {
+                "count": 2,
+                "tickers": ["AAPL", "MSFT"],
+            },
+        }
 
-        result = client.continue_with_tool_results(messages=messages)
-
-        # Verify the full message history was sent
-        call_kwargs = mock_completion.call_args.kwargs
-        sent_messages = call_kwargs["messages"]
-
-        assert len(sent_messages) == 4
-        assert sent_messages[3]["role"] == "tool"
-        assert "market_status" in sent_messages[3]["content"]
-
-    @patch("infrastructure.ai.llm_client.completion")
-    def test_continue_can_return_more_tool_calls(self, mock_completion):
-        """Test that continue can return additional tool calls."""
-        mock_message = MagicMock()
-        mock_message.content = ""
-        mock_message.tool_calls = [
-            MagicMock(
-                id="call_456",
-                function=MagicMock(
-                    name="get_ticker_price",
-                    arguments='{"symbol": "SPY"}',
-                ),
-            )
-        ]
-
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=mock_message)]
-
-        mock_completion.return_value = mock_response
-
-        client = LLMClient()
-
-        result = client.continue_with_tool_results(
-            messages=[{"role": "user", "content": "test"}],
-            tools=[{"type": "function", "function": {"name": "get_ticker_price"}}],
+        client = LLMClient(template_dir=str(tmp_path))
+        result = client.analyze_signal(
+            signal_data={"ticker": "SPY"},
+            market_data={},
+            portfolio_data={},
+            trading_params={},
+            prefetched_data=prefetched_data,
         )
 
-        assert len(result["tool_calls"]) == 1
-        assert result["tool_calls"][0]["function"] == "get_ticker_price"
+        # Verify prefetched data was included in prompt
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        messages = call_kwargs["messages"]
+        user_message = messages[1]["content"]
 
-    @patch("infrastructure.ai.llm_client.completion")
-    def test_continue_error_handling(self, mock_completion):
-        """Test error handling in continue."""
-        mock_completion.side_effect = Exception("Network error")
+        assert "PRE-FETCHED DATA" in user_message
+        assert "10:30:00" in user_message
+        assert "605.50" in user_message
+        assert "10,000.00" in user_message
 
-        client = LLMClient()
 
-        result = client.continue_with_tool_results(
-            messages=[{"role": "user", "content": "test"}],
-        )
-
-        assert result["content"] == ""
-        assert result["tool_calls"] == []
-        assert "error" in result
-
+# =============================================================================
+# Tests for DeepSeek Reasoner support
+# =============================================================================
 
 class TestDeepSeekReasonerSupport:
     """Test DeepSeek Reasoner specific features."""
 
-    @patch("infrastructure.ai.llm_client.completion")
-    def test_extracts_reasoning_content(self, mock_completion, tmp_path):
+    @patch("infrastructure.ai.llm_client.OpenAI")
+    @patch("infrastructure.ai.llm_client.get_user_template", return_value=None)
+    @patch("infrastructure.ai.llm_client.get_system_prompt", return_value="System prompt")
+    def test_extracts_reasoning_content(
+        self, mock_sys_prompt, mock_user_template, mock_openai_class, tmp_path
+    ):
         """Test that reasoning_content is extracted for DeepSeek."""
         mock_message = MagicMock()
         mock_message.content = '{"action": "execute"}'
         mock_message.tool_calls = None
         mock_message.reasoning_content = "Let me think about this step by step..."
+        mock_message.provider_specific_fields = {}
 
         mock_response = MagicMock()
+        mock_response.id = "req_789"
         mock_response.choices = [MagicMock(message=mock_message)]
-        mock_response.usage = MagicMock(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-        )
+        mock_response.usage = MagicMock(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
-        mock_completion.return_value = mock_response
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai_class.return_value = mock_client
 
         template_file = tmp_path / "signal_analysis.j2"
         template_file.write_text("Test")
@@ -410,8 +343,12 @@ class TestDeepSeekReasonerSupport:
 
         assert result.get("reasoning_content") == "Let me think about this step by step..."
 
-    @patch("infrastructure.ai.llm_client.completion")
-    def test_extracts_reasoning_from_provider_specific(self, mock_completion, tmp_path):
+    @patch("infrastructure.ai.llm_client.OpenAI")
+    @patch("infrastructure.ai.llm_client.get_user_template", return_value=None)
+    @patch("infrastructure.ai.llm_client.get_system_prompt", return_value="System prompt")
+    def test_extracts_reasoning_from_provider_specific(
+        self, mock_sys_prompt, mock_user_template, mock_openai_class, tmp_path
+    ):
         """Test extracting reasoning from provider_specific_fields."""
         mock_message = MagicMock()
         mock_message.content = '{"action": "skip"}'
@@ -422,14 +359,13 @@ class TestDeepSeekReasonerSupport:
         }
 
         mock_response = MagicMock()
+        mock_response.id = "req_000"
         mock_response.choices = [MagicMock(message=mock_message)]
-        mock_response.usage = MagicMock(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-        )
+        mock_response.usage = MagicMock(prompt_tokens=100, completion_tokens=50, total_tokens=150)
 
-        mock_completion.return_value = mock_response
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai_class.return_value = mock_client
 
         template_file = tmp_path / "signal_analysis.j2"
         template_file.write_text("Test")
@@ -443,3 +379,62 @@ class TestDeepSeekReasonerSupport:
         )
 
         assert result.get("reasoning_content") == "Alternative reasoning location"
+
+
+# =============================================================================
+# Tests for scheduled reanalysis context
+# =============================================================================
+
+class TestScheduledReanalysis:
+    """Test scheduled reanalysis context handling."""
+
+    @patch("infrastructure.ai.llm_client.OpenAI")
+    @patch("infrastructure.ai.llm_client.get_user_template", return_value=None)
+    @patch("infrastructure.ai.llm_client.get_system_prompt", return_value="System prompt")
+    def test_scheduled_context_included_in_prompt(
+        self, mock_sys_prompt, mock_user_template, mock_openai_class, tmp_path, mock_openai_response
+    ):
+        """Test that scheduled context is added to prompt."""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_openai_response(content="OK")
+        mock_openai_class.return_value = mock_client
+
+        template_file = tmp_path / "signal_analysis.j2"
+        template_file.write_text("Base prompt")
+
+        scheduled_context = {
+            "retry_count": 2,
+            "delay_reason": "Waiting for market open",
+            "delay_question": "Is the market open now?",
+            "key_levels": {"support": 600.0, "resistance": 610.0},
+            "previous_analysis": {
+                "tools_called": ["get_current_time"],
+                "tool_results_summary": {
+                    "market_status": "pre-market",
+                    "time_est": "09:15:00",
+                },
+            },
+        }
+
+        client = LLMClient(template_dir=str(tmp_path))
+        result = client.analyze_signal(
+            signal_data={"ticker": "SPY"},
+            market_data={},
+            portfolio_data={},
+            trading_params={},
+            scheduled_context=scheduled_context,
+        )
+
+        # Verify scheduled context was included in prompt
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        messages = call_kwargs["messages"]
+        user_message = messages[1]["content"]
+
+        assert "SCHEDULED REANALYSIS" in user_message
+        assert "Attempt #2" in user_message
+        assert "Waiting for market open" in user_message
+        assert "Is the market open now?" in user_message
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "-s"])

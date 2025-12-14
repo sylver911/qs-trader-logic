@@ -1,172 +1,185 @@
-"""Tests for IBKR Client."""
+"""Tests for IBKR Client.
+
+These tests use the mocked ibind from conftest.py.
+"""
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, PropertyMock
+
+# Import the mock instance from conftest (already set up in sys.modules)
+from conftest import mock_ibkr_client_instance, mock_ibkr_client_class
+
+from infrastructure.broker.ibkr_client import IBKRBroker
 
 
 class TestIBKRBroker:
     """Test IBKR broker client."""
 
+    def setup_method(self):
+        """Reset mocks before each test."""
+        mock_ibkr_client_instance.reset_mock()
+        mock_ibkr_client_instance.side_effect = None
+        # Reset common return values
+        mock_ibkr_client_instance.tickle.side_effect = None
+        mock_ibkr_client_instance.positions.side_effect = None
+        mock_ibkr_client_instance.cancel_order.side_effect = None
+        mock_ibkr_client_instance.live_orders.side_effect = None
+        mock_ibkr_client_instance.portfolio_accounts.side_effect = None
+
     def test_check_health_success(self):
         """Test successful health check."""
-        mock_client = MagicMock()
-        mock_client.tickle.return_value = MagicMock(data={"authenticated": True})
+        mock_ibkr_client_instance.tickle.return_value = MagicMock(
+            data={"authenticated": True}
+        )
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        broker = IBKRBroker()
+        result = broker.check_health()
 
-            broker = IBKRBroker()
-            result = broker.check_health()
-
-            assert result is True
+        assert result is True
+        mock_ibkr_client_instance.tickle.assert_called_once()
 
     def test_check_health_failure(self):
         """Test health check failure."""
-        mock_client = MagicMock()
-        mock_client.tickle.side_effect = Exception("Connection failed")
+        mock_ibkr_client_instance.tickle.side_effect = Exception("Connection failed")
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        broker = IBKRBroker()
+        result = broker.check_health()
 
-            broker = IBKRBroker()
-            result = broker.check_health()
+        assert result is False
 
-            assert result is False
-
-    def test_get_positions(self):
+    def test_get_positions_success(self):
         """Test getting positions."""
-        mock_client = MagicMock()
-        mock_client.positions.return_value = MagicMock(
+        mock_ibkr_client_instance.positions.return_value = MagicMock(
             data=[{"ticker": "SPY", "position": 10}]
         )
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        broker = IBKRBroker()
+        positions = broker.get_positions()
 
-            broker = IBKRBroker()
-            positions = broker.get_positions()
-
-            assert len(positions) == 1
-            assert positions[0]["ticker"] == "SPY"
+        assert len(positions) == 1
+        assert positions[0]["ticker"] == "SPY"
 
     def test_get_positions_error(self):
         """Test positions fetch error returns empty list."""
-        mock_client = MagicMock()
-        mock_client.positions.side_effect = Exception("API Error")
+        mock_ibkr_client_instance.positions.side_effect = Exception("API Error")
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        broker = IBKRBroker()
+        positions = broker.get_positions()
 
-            broker = IBKRBroker()
-            positions = broker.get_positions()
+        assert positions == []
 
-            assert positions == []
-
-    def test_search_contract(self):
+    def test_search_contract_success(self):
         """Test contract search."""
-        mock_client = MagicMock()
-        mock_client.search_contract_by_symbol.return_value = MagicMock(
+        mock_ibkr_client_instance.search_contract_by_symbol.return_value = MagicMock(
             data=[{"conid": "265598", "symbol": "SPY"}]
         )
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        broker = IBKRBroker()
+        contract = broker.search_contract("SPY")
 
-            broker = IBKRBroker()
-            contract = broker.search_contract("SPY")
-
-            assert contract is not None
-            assert contract["conid"] == "265598"
+        assert contract is not None
+        assert contract["conid"] == "265598"
 
     def test_search_contract_not_found(self):
         """Test contract search when not found."""
-        mock_client = MagicMock()
-        mock_client.search_contract_by_symbol.return_value = MagicMock(data=[])
+        mock_ibkr_client_instance.search_contract_by_symbol.return_value = MagicMock(
+            data=[]
+        )
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        broker = IBKRBroker()
+        contract = broker.search_contract("INVALID")
 
-            broker = IBKRBroker()
-            contract = broker.search_contract("INVALID")
+        assert contract is None
 
-            assert contract is None
-
-    def test_place_order(self):
+    def test_place_order_success(self):
         """Test order placement."""
-        mock_client = MagicMock()
-        mock_client.place_order.return_value = MagicMock(
+        # Mock receive_brokerage_accounts (preflight)
+        mock_ibkr_client_instance.receive_brokerage_accounts.return_value = MagicMock(
+            data={"accounts": ["DU123"]}
+        )
+
+        # Mock place_order
+        mock_ibkr_client_instance.place_order.return_value = MagicMock(
             data={"order_id": "12345"}
         )
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        broker = IBKRBroker()
+        broker._account_id = "DU123"  # Set account ID directly
+        result = broker.place_order(
+            conid="265598",
+            side="BUY",
+            quantity=10,
+            order_type="MKT",
+        )
 
-            broker = IBKRBroker()
-            result = broker.place_order(
-                conid="265598",
-                side="BUY",
-                quantity=10,
-                order_type="MKT",
-            )
-
-            assert result is not None
+        assert result is not None
 
     def test_cancel_order_success(self):
         """Test successful order cancellation."""
-        mock_client = MagicMock()
-        mock_client.cancel_order.return_value = MagicMock(data={"msg": "cancelled"})
+        mock_ibkr_client_instance.cancel_order.return_value = MagicMock(
+            data={"msg": "cancelled"}
+        )
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        broker = IBKRBroker()
+        broker._account_id = "DU123"
+        result = broker.cancel_order("12345")
 
-            broker = IBKRBroker()
-            result = broker.cancel_order("12345")
-
-            assert result is True
+        assert result is True
 
     def test_cancel_order_failure(self):
         """Test order cancellation failure."""
-        mock_client = MagicMock()
-        mock_client.cancel_order.side_effect = Exception("Not found")
+        mock_ibkr_client_instance.cancel_order.side_effect = Exception("Not found")
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        broker = IBKRBroker()
+        result = broker.cancel_order("12345")
 
-            broker = IBKRBroker()
-            result = broker.cancel_order("12345")
+        assert result is False
 
-            assert result is False
-
-    def test_get_live_orders(self):
+    def test_get_live_orders_success(self):
         """Test getting live orders."""
-        mock_client = MagicMock()
-        mock_client.live_orders.return_value = MagicMock(
+        mock_ibkr_client_instance.live_orders.return_value = MagicMock(
             data={"orders": [{"orderId": "123"}]}
         )
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        broker = IBKRBroker()
+        orders = broker.get_live_orders()
 
-            broker = IBKRBroker()
-            orders = broker.get_live_orders()
+        assert len(orders) == 1
 
-            assert len(orders) == 1
+    def test_get_live_orders_error(self):
+        """Test live orders error returns empty list."""
+        mock_ibkr_client_instance.live_orders.side_effect = Exception("API Error")
 
-    def test_get_account_summary(self):
+        broker = IBKRBroker()
+        orders = broker.get_live_orders()
+
+        assert orders == []
+
+    def test_get_account_summary_success(self):
         """Test getting account summary."""
-        mock_client = MagicMock()
-        mock_client.account_summary.return_value = MagicMock(
-            data={"netliquidation": 10000.0}
+        # Mock portfolio_accounts first
+        mock_ibkr_client_instance.portfolio_accounts.return_value = MagicMock(
+            data=[{"id": "DU123"}]
         )
 
-        with patch("ibind.IbkrClient", return_value=mock_client):
-            from infrastructure.broker.ibkr_client import IBKRBroker
+        # Mock account_summary
+        mock_ibkr_client_instance.account_summary.return_value = MagicMock(
+            data={"netliquidation": {"amount": 10000.0}}
+        )
 
-            broker = IBKRBroker()
-            summary = broker.get_account_summary()
+        broker = IBKRBroker()
+        summary = broker.get_account_summary()
 
-            assert summary is not None
-            assert "netliquidation" in summary
+        assert summary is not None
+
+    def test_get_account_summary_error(self):
+        """Test account summary error returns None."""
+        mock_ibkr_client_instance.portfolio_accounts.side_effect = Exception("API Error")
+
+        broker = IBKRBroker()
+        summary = broker.get_account_summary()
+
+        assert summary is None
 
 
 class TestIBKRClientImportBug:

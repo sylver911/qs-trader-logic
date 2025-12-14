@@ -11,6 +11,31 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+# =============================================================================
+# Mock external modules before any project imports
+# =============================================================================
+
+# Mock ibind (IBKR client library) to avoid connection issues during testing
+mock_ibkr_client_instance = MagicMock()
+mock_ibkr_client_class = MagicMock(return_value=mock_ibkr_client_instance)
+
+mock_ibind = MagicMock()
+mock_ibind.IbkrClient = mock_ibkr_client_class
+mock_ibind_client = MagicMock()
+mock_ibind_client_ibkr_utils = MagicMock()
+mock_ibind_client_ibkr_utils.make_order_request = MagicMock(return_value={})
+
+sys.modules["ibind"] = mock_ibind
+sys.modules["ibind.client"] = mock_ibind_client
+sys.modules["ibind.client.ibkr_utils"] = mock_ibind_client_ibkr_utils
+
+# Mock Redis to avoid connection issues during testing
+mock_redis_client = MagicMock()
+mock_redis_module = MagicMock()
+mock_redis_module.from_url.return_value = mock_redis_client
+sys.modules["redis"] = mock_redis_module
+
+
 @pytest.fixture(autouse=True)
 def mock_env_vars(monkeypatch):
     """Set up test environment variables."""
