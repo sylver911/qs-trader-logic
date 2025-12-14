@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 import time
 
+from config.redis_config import trading_config
 from infrastructure.broker.ibkr_client import IBKRBroker
 
 logger = logging.getLogger(__name__)
@@ -286,6 +287,33 @@ class OrderTools:
         # Build OCC symbol from components
         # Format: TICKER YYMMDD[C/P]STRIKE (e.g., SPY 241209C00605000)
         symbol = self._build_occ_symbol(ticker, expiry, strike, direction)
+
+        # DRY RUN CHECK - simulate order without actually placing it
+        if not trading_config.execute_orders:
+            logger.info(f"[DRY RUN] Would place bracket order:")
+            logger.info(f"  Symbol: {symbol}")
+            logger.info(f"  Side: {side}, Qty: {quantity}")
+            logger.info(f"  Entry: ${entry_price}, TP: ${take_profit}, SL: ${stop_loss}")
+            return {
+                "success": True,
+                "order": {"order_id": "DRY_RUN_SIMULATED"},
+                "conid": "DRY_RUN",
+                "symbol": symbol,
+                "product": {
+                    "ticker": ticker,
+                    "expiry": expiry,
+                    "strike": strike,
+                    "direction": direction.upper() if direction else None,
+                },
+                "side": side,
+                "quantity": quantity,
+                "entry_price": entry_price,
+                "take_profit": take_profit,
+                "stop_loss": stop_loss,
+                "order_type": "BRACKET",
+                "simulated": True,
+                "timestamp": datetime.now().isoformat(),
+            }
         logger.info(f"Built OCC symbol: {symbol}")
 
         conid, error = self._get_conid(symbol)

@@ -318,8 +318,9 @@ class LlmStrategy(Strategy):
             error=tool_result.get("error"),
         )
 
-        # Save trade to P&L tracking if successful
-        if trade_result.success and trading_config.execute_orders:
+        # Save trade to P&L tracking if successful (both live and dry run)
+        if trade_result.success:
+            is_simulated = tool_result.get("simulated", False)
             product = tool_result.get("product", {})
             trade_data = {
                 "thread_id": signal.thread_id,
@@ -333,9 +334,11 @@ class LlmStrategy(Strategy):
                 "conid": tool_result.get("conid"),
                 "model_used": response.get("model", ""),
                 "product": product,
+                "simulated": is_simulated,
             }
             trade_id = trades_repo.save_trade(trade_data)
             trade_result.trade_id = trade_id
+            trade_result.simulated = is_simulated
 
         return AIResponse(
             decision=TradeDecision(

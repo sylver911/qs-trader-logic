@@ -62,7 +62,7 @@ def main() -> int:
     logger.info(f"Execute Orders: {'LIVE' if params['execute_orders'] else 'DRY RUN (simulated)'}")
     logger.info(f"Max VIX: {params['max_vix_level']}")
     logger.info(f"Min Confidence: {params['min_ai_confidence_score']:.0%}")
-    logger.info(f"Whitelist: {params['whitelist_tickers']}")
+    # Note: Ticker whitelists are now per-strategy in StrategyConfig
 
     # Initialize services
     trading_service = TradingService()
