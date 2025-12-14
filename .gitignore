@@ -212,3 +212,5 @@ devel
 test-harness
 qs-docs
 claude.md
+# Claude Code
+.claude/
