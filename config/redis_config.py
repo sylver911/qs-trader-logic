@@ -22,8 +22,7 @@ class TradingConfig:
         # Core trading controls
         "emergency_stop": False,  # Kill switch for all trading
         "execute_orders": False,  # False = dry run (simulated), True = live orders
-        "use_prefetch_mode": True,  # True = single LLM call with prefetched data (V2)
-        
+
         # Risk filters (used in _validate_preconditions)
         "max_concurrent_positions": 5,  # Max open positions
         "max_vix_level": 25,  # Block trading if VIX too high
@@ -133,11 +132,6 @@ class TradingConfig:
         return self._get_value("current_llm_model", str)
 
     @property
-    def use_prefetch_mode(self) -> bool:
-        """If True, uses V2 trading service with single LLM call."""
-        return self._get_value("use_prefetch_mode", bool)
-
-    @property
     def max_position_size_percent(self) -> float:
         return self._get_value("max_position_size_percent", float)
 
@@ -165,7 +159,6 @@ class TradingConfig:
         return {
             "emergency_stop": self.emergency_stop,
             "execute_orders": self.execute_orders,
-            "use_prefetch_mode": self.use_prefetch_mode,
             "max_concurrent_positions": self.max_concurrent_positions,
             "max_vix_level": self.max_vix_level,
             "min_ai_confidence_score": self.min_ai_confidence_score,

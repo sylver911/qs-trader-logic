@@ -63,7 +63,6 @@ def main() -> int:
     logger.info(f"Max VIX: {params['max_vix_level']}")
     logger.info(f"Min Confidence: {params['min_ai_confidence_score']:.0%}")
     logger.info(f"Whitelist: {params['whitelist_tickers']}")
-    logger.info(f"Prefetch Mode: {'ON' if params['use_prefetch_mode'] else 'OFF'}")
 
     # Initialize services
     trading_service = TradingService()
