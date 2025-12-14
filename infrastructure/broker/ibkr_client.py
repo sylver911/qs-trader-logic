@@ -270,10 +270,14 @@ class IBKRBroker:
     ) -> Optional[Dict[str, Any]]:
         """Place a bracket order (entry + TP + SL).
 
-        Creates a parent-child order structure where:
-        - Entry order is the parent
-        - TP and SL are children with OCA (One-Cancels-All) grouping
-        - When TP fills, SL is cancelled and vice versa
+        Creates a parent-child order structure following ibind's official pattern:
+        - Entry order is the parent (LMT order with coid)
+        - Take profit is a child LMT order linked via parent_id
+        - Stop loss is a child STP order linked via parent_id
+
+        When entry fills, the child orders become active. IBKR handles the
+        OCA (One-Cancels-All) relationship between TP and SL automatically
+        for bracket orders.
 
         Args:
             conid: Contract ID
@@ -285,7 +289,7 @@ class IBKRBroker:
             tif: Time in force for entry order
 
         Returns:
-            Order result
+            Order result (list of order confirmations)
         """
         try:
             client = self._get_client()
@@ -299,10 +303,9 @@ class IBKRBroker:
                 logger.warning(f"Pre-flight brokerage accounts call failed: {e}")
                 # Continue anyway - the order might still work
 
-            # Unique IDs for order linkage
+            # Unique ID for parent-child order linkage
             timestamp = int(time.time())
             parent_coid = f"parent_{conid}_{timestamp}"
-            oca_group = f"oca_{conid}_{timestamp}"  # OCA group for TP and SL
 
             # Exit side is opposite of entry
             exit_side = "SELL" if side == "BUY" else "BUY"
@@ -319,7 +322,7 @@ class IBKRBroker:
                     acct_id=self._account_id,
                     coid=parent_coid,
                 ),
-                # Take profit (child, OCA with stop loss)
+                # Take profit (child linked to parent)
                 make_order_request(
                     conid=conid,
                     side=exit_side,
@@ -329,19 +332,18 @@ class IBKRBroker:
                     tif="GTC",
                     acct_id=self._account_id,
                     parent_id=parent_coid,
-                    is_single_group=True,  # Enable OCA grouping
                 ),
-                # Stop loss (child, OCA with take profit)
+                # Stop loss (child linked to parent)
+                # Note: STP orders use 'price' parameter, not 'aux_price'
                 make_order_request(
                     conid=conid,
                     side=exit_side,
                     quantity=quantity,
                     order_type="STP",
-                    aux_price=stop_loss,
+                    price=stop_loss,
                     tif="GTC",
                     acct_id=self._account_id,
                     parent_id=parent_coid,
-                    is_single_group=True,  # Enable OCA grouping
                 ),
             ]
 
@@ -358,7 +360,7 @@ class IBKRBroker:
 
             logger.info(
                 f"Bracket order placed: {side} {quantity} @ {entry_price}, "
-                f"TP: {take_profit}, SL: {stop_loss}, OCA: {oca_group}"
+                f"TP: {take_profit}, SL: {stop_loss}, parent_coid: {parent_coid}"
             )
             logger.debug(f"IBKR API response: {result}")
             logger.debug(f"IBKR API response.data: {result.data}")
