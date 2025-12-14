@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from config.settings import config
 from config.redis_config import trading_config
 from domain.models.signal import Signal
+from domain.preconditions import PreconditionManager
 from domain.models.trade import TradeAction, TradeDecision, AIResponse, TradeResult
 from infrastructure.storage.mongo import MongoHandler
 from infrastructure.storage.trades_repository import trades_repo
@@ -36,6 +37,8 @@ class TradingService:
         self._portfolio_tools = PortfolioTools(self._broker)
         self._order_tools = OrderTools(self._broker)
         self._schedule_tools = ScheduleTools()
+
+        self._precondition_manager = PreconditionManager()
 
     def process_signal(self, task: Dict[str, Any]) -> bool:
         """Process a signal from the queue.
@@ -145,66 +148,25 @@ class TradingService:
         return None
 
     def _validate_preconditions(self, signal: Signal) -> Optional[str]:
-        """Validate trading preconditions.
-        
+        """Validate trading preconditions using PreconditionManager.
+
         These are hard stops that don't need AI evaluation.
         """
-        # Emergency stop - immediate block
-        if trading_config.emergency_stop:
-            return "Emergency stop is active"
-
-        # Get ticker (try parsed, then raw)
+        # Resolve ticker (try parsed, then raw)
         ticker = signal.ticker
         if not ticker and signal.tickers_raw:
             logger.info(f"No clean ticker, using raw: {signal.tickers_raw}")
             ticker = signal.tickers_raw.split(',')[0].strip() if signal.tickers_raw else None
 
-        # No ticker and no content - can't process
-        if not ticker:
-            if signal.get_full_content() and len(signal.get_full_content()) > 50:
-                logger.info("No ticker but has content - letting AI analyze")
-                return None
-            return "No ticker found and insufficient content"
+        # Build context for preconditions
+        context = {
+            "trading_config": trading_config,
+            "broker": self._broker,
+            "market_data": self._market_data,
+            "ticker": ticker,
+        }
 
-        # Whitelist check
-        whitelist = trading_config.whitelist_tickers
-        if whitelist and ticker and ticker not in whitelist:
-            return f"Ticker {ticker} not in whitelist: {whitelist}"
-
-        # Blacklist check
-        blacklist = trading_config.blacklist_tickers
-        if ticker and ticker in blacklist:
-            return f"Ticker {ticker} is blacklisted"
-
-        # Low confidence from signal itself (not AI)
-        if signal.confidence and signal.confidence < trading_config.min_ai_confidence_score:
-            return f"Signal confidence {signal.confidence:.0%} below minimum {trading_config.min_ai_confidence_score:.0%}"
-
-        # VIX check (only in live mode)
-        if trading_config.execute_orders:
-            vix = self._market_data.get_vix()
-            if vix and vix > trading_config.max_vix_level:
-                return f"VIX {vix:.1f} above maximum {trading_config.max_vix_level}"
-
-            # Max positions check
-            positions = self._broker.get_positions()
-            if len(positions) >= trading_config.max_concurrent_positions:
-                return f"Max concurrent positions ({trading_config.max_concurrent_positions}) reached"
-            
-            # Duplicate position check - prevent entering same ticker twice
-            if ticker and positions:
-                existing_tickers = set()
-                for pos in positions:
-                    # Extract base ticker from position (handles option symbols like "SPY 241206C00605000")
-                    pos_symbol = pos.get("symbol", "") or pos.get("ticker", "")
-                    base_ticker = pos_symbol.split()[0].upper() if pos_symbol else ""
-                    if base_ticker:
-                        existing_tickers.add(base_ticker)
-                
-                if ticker.upper() in existing_tickers:
-                    return f"Already have position in {ticker} - duplicate entry blocked"
-
-        return None
+        return self._precondition_manager.check_all(signal, context)
 
     def _is_valid_ticker(self, ticker: str) -> bool:
         """Validate ticker format."""
