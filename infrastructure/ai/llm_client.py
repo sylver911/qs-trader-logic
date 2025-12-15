@@ -70,57 +70,89 @@ class LLMClient:
         return get_system_prompt()
 
     def _format_prefetched_data(self, data: Dict[str, Any]) -> str:
-        """Format pre-fetched tool data for inclusion in prompt."""
+        """Format pre-fetched tool data for inclusion in prompt.
+
+        Handles both old format (flat dict) and new PrefetchContext format.
+        New format keys: time, option_chain, account, positions, vix
+        """
         time_data = data.get("time", {})
         option_chain = data.get("option_chain", {})
         account = data.get("account", {})
         positions = data.get("positions", {})
-        
+        vix_data = data.get("vix", {})
+
         sections = ["\n---\n## PRE-FETCHED DATA (already retrieved for you)\n"]
-        
+
         # Time
-        if time_data and not time_data.get("error"):
+        if time_data and time_data.get("success", True) and not time_data.get("error"):
             sections.append(f"""### Current Time
 - **Time (ET):** {time_data.get('time_est', 'N/A')}
 - **Date:** {time_data.get('date', 'N/A')} ({time_data.get('day_of_week', 'N/A')})
 - **Market Status:** {time_data.get('market_status', 'N/A')}
 - **Is Open:** {time_data.get('is_market_open', 'Unknown')}
 """)
-        
+            if time_data.get('closes_at'):
+                sections.append(f"- **Closes At:** {time_data.get('closes_at')}\n")
+            if time_data.get('opens_at'):
+                sections.append(f"- **Opens At:** {time_data.get('opens_at')}\n")
+
+        # VIX
+        if vix_data and vix_data.get("success", True) and not vix_data.get("error"):
+            sections.append(f"""### VIX (Volatility)
+- **VIX:** {vix_data.get('value', 'N/A')}
+- **Level:** {vix_data.get('level', 'N/A')}
+""")
+
         # Option chain
-        if option_chain and not option_chain.get("error"):
+        if option_chain and option_chain.get("success", True) and not option_chain.get("error"):
             sections.append(f"""### Option Chain
 - **Underlying Price:** ${option_chain.get('current_price', 0):.2f}
-- **Expiries:** {', '.join(option_chain.get('available_expiries', [])[:5])}
+- **Expiry:** {option_chain.get('expiry', 'N/A')}
+- **Available Expiries:** {', '.join(option_chain.get('available_expiries', [])[:5])}
 """)
-            if option_chain.get('calls'):
+            calls = option_chain.get('calls', [])
+            if calls:
                 sections.append("**Calls:**\n")
-                for c in option_chain['calls'][:6]:
-                    itm = "ITM" if c.get('inTheMoney') else "OTM"
-                    sections.append(f"  ${c.get('strike')}: ${c.get('bid', 0):.2f}/${c.get('ask', 0):.2f} ({itm})\n")
-            if option_chain.get('puts'):
+                for c in calls[:6]:
+                    itm = "ITM" if c.get('in_the_money', c.get('inTheMoney')) else "OTM"
+                    bid = c.get('bid', 0) or 0
+                    ask = c.get('ask', 0) or 0
+                    sections.append(f"  ${c.get('strike')}: ${bid:.2f}/${ask:.2f} ({itm})\n")
+
+            puts = option_chain.get('puts', [])
+            if puts:
                 sections.append("**Puts:**\n")
-                for p in option_chain['puts'][:6]:
-                    itm = "ITM" if p.get('inTheMoney') else "OTM"
-                    sections.append(f"  ${p.get('strike')}: ${p.get('bid', 0):.2f}/${p.get('ask', 0):.2f} ({itm})\n")
-        
-        # Account
-        if account and not account.get("error"):
+                for p in puts[:6]:
+                    itm = "ITM" if p.get('in_the_money', p.get('inTheMoney')) else "OTM"
+                    bid = p.get('bid', 0) or 0
+                    ask = p.get('ask', 0) or 0
+                    sections.append(f"  ${p.get('strike')}: ${bid:.2f}/${ask:.2f} ({itm})\n")
+
+        # Account - handle both old and new field names
+        if account and account.get("success", True) and not account.get("error"):
+            available = account.get('available', account.get('usd_available_for_trading', 0)) or 0
+            buying_power = account.get('buying_power', account.get('usd_buying_power', 0)) or 0
+            net_liq = account.get('net_liquidation', account.get('usd_net_liquidation', 0)) or 0
             sections.append(f"""### Account
-- **Available:** ${account.get('usd_available_for_trading', 0):,.2f}
-- **Buying Power:** ${account.get('usd_buying_power', 0):,.2f}
-- **Net Liq:** ${account.get('usd_net_liquidation', 0):,.2f}
+- **Available:** ${available:,.2f}
+- **Buying Power:** ${buying_power:,.2f}
+- **Net Liq:** ${net_liq:,.2f}
 """)
-        
+            if account.get('is_simulated'):
+                sections.append("- *(Simulated - Dry Run Mode)*\n")
+
         # Positions
-        if positions and not positions.get("error"):
+        if positions and positions.get("success", True) and not positions.get("error"):
+            tickers = positions.get('tickers', [])
             sections.append(f"""### Positions
 - **Count:** {positions.get('count', 0)}
-- **Tickers:** {', '.join(positions.get('tickers', [])) or 'None'}
+- **Tickers:** {', '.join(tickers) if tickers else 'None'}
 """)
-        
-        sections.append("\n**Note:** This data is already fetched. You can still call tools if needed, but the above is current.\n---\n")
-        
+            if positions.get('total_unrealized_pnl'):
+                sections.append(f"- **Unrealized P&L:** ${positions.get('total_unrealized_pnl', 0):,.2f}\n")
+
+        sections.append("\n**Note:** This data is already fetched. Use it for your analysis.\n---\n")
+
         return "".join(sections)
 
     def analyze_signal(

@@ -2,22 +2,27 @@
 
 This strategy uses an LLM to analyze signals and make trading decisions.
 It encapsulates the current AI analysis logic from trading_service.py.
+
+Prefetched data is available in Jinja2 templates via:
+    {{ time.is_market_open }}
+    {{ account.buying_power }}
+    {{ option_chain.calls[0].strike }}
+    {{ positions.count }}
+    {{ vix.value }}
 """
 
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Optional
 
 from domain.models.signal import Signal
 from domain.models.trade import AIResponse, TradeAction, TradeDecision, TradeResult
 from domain.strategies.base import Strategy, StrategyConfig
+from domain.prefetches import PrefetchManager
 from infrastructure.ai.llm_client import LLMClient
 from infrastructure.storage.trades_repository import trades_repo
 from tools.order_tools import OrderTools
 from tools.schedule_tools import ScheduleTools
-from tools.market_tools import MarketTools
-from tools.portfolio_tools import PortfolioTools
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,13 @@ class LlmStrategy(Strategy):
 
     Subclass this to create forum-specific LLM strategies with
     different configurations (prompts, models, risk params).
+
+    Prefetched data is automatically available in Jinja2 templates:
+        {{ time.is_market_open }}
+        {{ account.buying_power }}
+        {{ option_chain.calls[0].strike }}
+        {{ positions.count }}
+        {{ vix.value }}
     """
 
     name = "llm_base"
@@ -35,7 +47,7 @@ class LlmStrategy(Strategy):
     def __init__(self):
         super().__init__()
         self._llm = LLMClient()
-        # Tools are initialized when execute() is called with context
+        self._prefetch_manager = PrefetchManager()
 
     def execute(self, signal: Signal, context: Dict[str, Any]) -> AIResponse:
         """Execute LLM-based analysis on the signal.
@@ -48,25 +60,28 @@ class LlmStrategy(Strategy):
             AIResponse with the decision
         """
         broker = context.get("broker")
-        market_data_provider = context.get("market_data")
         trading_config = context.get("trading_config")
         scheduled_context = context.get("scheduled_context")
 
         # Initialize tools with broker
-        market_tools = MarketTools(market_data_provider)
-        portfolio_tools = PortfolioTools(broker)
         order_tools = OrderTools(broker)
         schedule_tools = ScheduleTools()
 
-        # Pre-fetch market data
-        prefetched_data = self._prefetch_tool_data(signal, market_tools, portfolio_tools)
+        # Pre-fetch all data using PrefetchManager (parallel execution)
+        prefetch_context = self._prefetch_manager.fetch_all(signal, context)
 
-        # Get portfolio data
-        if trading_config.execute_orders:
-            portfolio = portfolio_tools.get_portfolio_summary()
-            portfolio_data = portfolio.to_dict() if portfolio else {}
-        else:
-            portfolio_data = {"positions": [], "cash": 10000, "pnl": 0}
+        # Convert to template-ready dict for LLM
+        prefetched_data = prefetch_context.to_template_context()
+
+        # Get portfolio data from prefetch (for backward compatibility)
+        account_data = prefetched_data.get("account", {})
+        positions_data = prefetched_data.get("positions", {})
+        portfolio_data = {
+            "cash": account_data.get("available", 10000),
+            "buying_power": account_data.get("buying_power", 20000),
+            "positions": positions_data.get("items", []),
+            "pnl": positions_data.get("total_unrealized_pnl", 0),
+        }
 
         # Prepare market data
         market_data = {"symbol": signal.ticker, "timestamp": ""} if signal.ticker else {}
@@ -94,7 +109,7 @@ class LlmStrategy(Strategy):
 
         retry_count = scheduled_context.get("retry_count", 0) if scheduled_context else 0
 
-        # Single LLM call
+        # Single LLM call with prefetched data
         response = self._llm.analyze_signal(
             signal_data=signal.to_dict(),
             market_data=market_data,
@@ -116,55 +131,6 @@ class LlmStrategy(Strategy):
             trace_id=trace_id,
             trading_config=trading_config,
         )
-
-    def _prefetch_tool_data(
-        self,
-        signal: Signal,
-        market_tools: MarketTools,
-        portfolio_tools: PortfolioTools,
-    ) -> Dict[str, Any]:
-        """Pre-fetch all tool data in parallel."""
-        data = {}
-        market_handlers = market_tools.get_handlers()
-        portfolio_handlers = portfolio_tools.get_handlers()
-
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = {}
-
-            # 1. Current time
-            futures[executor.submit(market_handlers["get_current_time"])] = "time"
-
-            # 2. Option chain (if ticker known)
-            if signal.ticker:
-                if signal.expiry:
-                    futures[executor.submit(
-                        market_handlers["get_option_chain"],
-                        symbol=signal.ticker,
-                        expiry=signal.expiry
-                    )] = "option_chain"
-                else:
-                    futures[executor.submit(
-                        market_handlers["get_option_chain"],
-                        symbol=signal.ticker
-                    )] = "option_chain"
-
-            # 3. Account summary
-            futures[executor.submit(portfolio_handlers["get_account_summary"])] = "account"
-
-            # 4. Current positions
-            futures[executor.submit(portfolio_handlers["get_positions"])] = "positions"
-
-            # Collect results
-            for future in as_completed(futures):
-                key = futures[future]
-                try:
-                    data[key] = future.result()
-                    logger.debug(f"   ✓ Prefetch {key}")
-                except Exception as e:
-                    logger.warning(f"   ✗ Prefetch {key} failed: {e}")
-                    data[key] = {"error": str(e)}
-
-        return data
 
     def _process_llm_response(
         self,
