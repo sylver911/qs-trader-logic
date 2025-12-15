@@ -201,9 +201,15 @@ class TradingService:
 
         # Live execution
         try:
+            # Determine option direction from signal
+            direction = "CALL" if signal.direction in ["CALL", "BUY", "LONG"] else "PUT"
+
             result = self._order_tools.place_bracket_order(
-                symbol=signal.ticker,
-                side="BUY" if signal.direction in ["CALL", "BUY"] else "SELL",
+                ticker=signal.ticker,
+                expiry=signal.expiry,
+                strike=signal.strike,
+                direction=direction,
+                side="BUY",  # Always BUY to open option position
                 quantity=quantity,
                 entry_price=entry,
                 take_profit=target,
