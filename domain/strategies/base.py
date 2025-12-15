@@ -2,6 +2,10 @@
 
 Each forum can have its own strategy that determines how signals are processed.
 Strategies can use LLM analysis, hardcoded rules, or a combination.
+
+IMPORTANT: Strategy configurations should come from Redis (dashboard settings),
+not hardcoded values. The StrategyConfig class provides defaults that are
+overridden by Redis config at runtime.
 """
 
 import re
@@ -17,10 +21,14 @@ from domain.models.trade import AIResponse
 class StrategyConfig:
     """Configuration for a trading strategy.
 
-    This replaces per-forum settings that were previously global.
+    Values here are DEFAULTS that get overridden by Redis config.
+    The actual runtime values come from:
+    1. Redis config (dashboard) - highest priority
+    2. Strategy defaults (this class) - fallback
     """
-    # Ticker filters (moved from global config)
-    whitelist_tickers: List[str] = field(default_factory=list)  # Empty = all allowed
+    # Ticker filters - EMPTY means use global Redis config
+    # If set here, they EXTEND (not replace) the global config
+    whitelist_tickers: List[str] = field(default_factory=list)
     blacklist_tickers: List[str] = field(default_factory=list)
 
     # AI settings
@@ -80,11 +88,16 @@ class Strategy(ABC):
 
         return False
 
-    def validate_ticker(self, signal: Signal) -> Optional[str]:
-        """Validate ticker against strategy's whitelist/blacklist.
+    def validate_ticker(self, signal: Signal, context: Dict[str, Any] = None) -> Optional[str]:
+        """Validate ticker against whitelist/blacklist from Redis config.
+
+        Priority:
+        1. Redis config (dashboard settings) - if set
+        2. Strategy config (fallback) - only if Redis is empty
 
         Args:
             signal: The trading signal
+            context: Context containing trading_config from Redis
 
         Returns:
             Error message if validation fails, None if passed
@@ -95,15 +108,36 @@ class Strategy(ABC):
 
         ticker = ticker.upper()
 
-        # Check whitelist (if set)
-        if self.config.whitelist_tickers:
-            if ticker not in [t.upper() for t in self.config.whitelist_tickers]:
-                return f"Ticker {ticker} not in strategy whitelist: {self.config.whitelist_tickers}"
+        # Get config from Redis (dashboard) via context
+        trading_config = context.get("trading_config") if context else None
+
+        # Determine effective whitelist/blacklist
+        # Priority: Redis config > Strategy config (only if Redis is empty)
+        whitelist = []
+        blacklist = []
+
+        if trading_config:
+            # Get from Redis config (dashboard settings)
+            redis_whitelist = trading_config.whitelist_tickers or []
+            redis_blacklist = trading_config.blacklist_tickers or []
+
+            # Use Redis config if set, otherwise fall back to strategy config
+            whitelist = redis_whitelist if redis_whitelist else self.config.whitelist_tickers
+            blacklist = redis_blacklist if redis_blacklist else self.config.blacklist_tickers
+        else:
+            # No Redis config available, use strategy defaults
+            whitelist = self.config.whitelist_tickers
+            blacklist = self.config.blacklist_tickers
+
+        # Check whitelist (if set - empty list means all allowed)
+        if whitelist:
+            if ticker not in [t.upper() for t in whitelist]:
+                return f"Ticker {ticker} not in whitelist: {whitelist}"
 
         # Check blacklist
-        if self.config.blacklist_tickers:
-            if ticker in [t.upper() for t in self.config.blacklist_tickers]:
-                return f"Ticker {ticker} is blacklisted in strategy"
+        if blacklist:
+            if ticker in [t.upper() for t in blacklist]:
+                return f"Ticker {ticker} is blacklisted"
 
         return None
 
@@ -114,7 +148,7 @@ class Strategy(ABC):
 
         Args:
             signal: The trading signal
-            context: Shared context dict
+            context: Shared context dict (contains trading_config from Redis)
 
         Returns:
             Error message if check fails, None if passed
@@ -123,8 +157,8 @@ class Strategy(ABC):
         if not self.config.enabled:
             return f"Strategy '{self.name}' is disabled"
 
-        # Validate ticker
-        ticker_error = self.validate_ticker(signal)
+        # Validate ticker against Redis config (dashboard settings)
+        ticker_error = self.validate_ticker(signal, context)
         if ticker_error:
             return ticker_error
 

@@ -2,6 +2,9 @@
 
 This is the main 0DTE options trading strategy using LLM analysis.
 Uses the current production logic with AI-based decision making.
+
+NOTE: Ticker whitelist/blacklist comes from Redis config (dashboard).
+Strategy-level whitelist is empty = use global Redis config.
 """
 
 from domain.strategies.base import StrategyConfig
@@ -13,6 +16,8 @@ class Live0DteStrategy(LlmStrategy):
 
     This forum focuses on same-day expiry (0DTE) options trades.
     Uses AI to analyze signals and make trading decisions.
+
+    Ticker filtering is controlled by Redis config (dashboard settings).
     """
 
     name = "live_0dte"
@@ -26,10 +31,12 @@ class Live0DteStrategy(LlmStrategy):
         super().__init__()
 
         # Strategy-specific configuration
+        # NOTE: whitelist/blacklist comes from Redis config (dashboard)
+        # Empty list here means: use global Redis config
         self.config = StrategyConfig(
-            # Ticker filters - only trade major indices for 0DTE
-            whitelist_tickers=["SPY", "QQQ", "IWM", "DIA"],
-            blacklist_tickers=[],
+            # Ticker filters - EMPTY = use Redis config from dashboard
+            whitelist_tickers=[],  # Controlled by dashboard
+            blacklist_tickers=[],  # Controlled by dashboard
 
             # AI settings
             use_llm=True,

@@ -2,6 +2,9 @@
 
 Kline signals based on technical analysis patterns.
 Uses LLM analysis by default, but can be switched to hardcoded rules.
+
+NOTE: Ticker whitelist/blacklist comes from Redis config (dashboard).
+Strategy-level whitelist is empty = use global Redis config.
 """
 
 from domain.strategies.base import StrategyConfig
@@ -13,6 +16,8 @@ class LiveKlineStrategy(LlmStrategy):
 
     This forum focuses on Kline (candlestick) pattern signals.
     Currently uses LLM analysis, but can be customized for pattern-specific rules.
+
+    Ticker filtering is controlled by Redis config (dashboard settings).
     """
 
     name = "live_kline"
@@ -26,10 +31,12 @@ class LiveKlineStrategy(LlmStrategy):
         super().__init__()
 
         # Strategy-specific configuration
+        # NOTE: whitelist/blacklist comes from Redis config (dashboard)
+        # Empty list here means: use global Redis config
         self.config = StrategyConfig(
-            # Ticker filters - broader range for Kline patterns
-            whitelist_tickers=["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "TSLA", "AMD", "META", "GOOGL", "AMZN"],
-            blacklist_tickers=[],
+            # Ticker filters - EMPTY = use Redis config from dashboard
+            whitelist_tickers=[],  # Controlled by dashboard
+            blacklist_tickers=[],  # Controlled by dashboard
 
             # AI settings
             use_llm=True,

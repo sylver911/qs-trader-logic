@@ -18,6 +18,7 @@ class TradingConfig:
     """
 
     # Default values - only configs that are actually used
+    # NOTE: These are fallbacks - actual values come from Redis (dashboard)
     DEFAULTS = {
         # Core trading controls
         "emergency_stop": False,  # Kill switch for all trading
@@ -27,14 +28,15 @@ class TradingConfig:
         "max_concurrent_positions": 5,  # Max open positions
         "max_vix_level": 25,  # Block trading if VIX too high
         "min_ai_confidence_score": 0.5,  # Minimum signal confidence (0-1)
-        
-        # Ticker filters
-        "whitelist_tickers": ["SPY", "QQQ"],  # Only trade these (empty = all allowed)
+
+        # Ticker filters - EMPTY by default = all tickers allowed
+        # Set via dashboard to restrict trading to specific tickers
+        "whitelist_tickers": [],  # Empty = all allowed, set in dashboard to restrict
         "blacklist_tickers": [],  # Never trade these
-        
+
         # Position sizing (used in V2)
         "max_position_size_percent": 0.05,  # 5% of portfolio per trade
-        
+
         # AI model
         "current_llm_model": "deepseek/deepseek-reasoner",
     }
