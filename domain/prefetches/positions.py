@@ -24,7 +24,7 @@ Jinja2 template usage:
 import logging
 from typing import Any, Dict, List
 
-from domain.prefetches.base import Prefetch, PrefetchResult
+from domain.prefetches.base import Prefetch, PrefetchResult, TemplateVariable
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,16 @@ class PositionsPrefetch(Prefetch):
     description = "Current open positions"
     requires_ticker = False
     requires_broker = True
+
+    TEMPLATE_DOCS: List[TemplateVariable] = [
+        TemplateVariable("count", "int", "Number of open positions", "3"),
+        TemplateVariable("tickers", "list", "List of ticker symbols with open positions", '["SPY", "QQQ", "AAPL"]'),
+        TemplateVariable("has_positions", "bool", "True if any positions are open", "true"),
+        TemplateVariable("items", "list", "List of position objects with symbol, ticker, quantity, avg_cost, market_value, unrealized_pnl", '[{symbol: "SPY", quantity: 10, ...}]'),
+        TemplateVariable("total_unrealized_pnl", "float", "Sum of unrealized P&L across all positions", "150.50"),
+        TemplateVariable("total_market_value", "float", "Total market value of all positions", "5000.00"),
+        TemplateVariable("is_simulated", "bool", "True if in dry run mode (mock data)", "false"),
+    ]
 
     def fetch(self, signal, context: Dict[str, Any]) -> PrefetchResult:
         """Fetch current positions."""

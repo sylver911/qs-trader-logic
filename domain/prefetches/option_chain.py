@@ -27,7 +27,7 @@ Jinja2 template usage:
 import logging
 from typing import Any, Dict, List, Optional
 
-from domain.prefetches.base import Prefetch, PrefetchResult
+from domain.prefetches.base import Prefetch, PrefetchResult, TemplateVariable
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,17 @@ class OptionChainPrefetch(Prefetch):
     description = "Option chain with calls and puts for signal ticker"
     requires_ticker = True
     requires_broker = False  # Uses yfinance fallback
+
+    TEMPLATE_DOCS: List[TemplateVariable] = [
+        TemplateVariable("symbol", "string", "Ticker symbol", "SPY"),
+        TemplateVariable("current_price", "float", "Current underlying price", "680.50"),
+        TemplateVariable("expiry", "string", "Selected expiry date", "2025-12-15"),
+        TemplateVariable("available_expiries", "list", "List of available expiry dates", '["2025-12-15", "2025-12-16"]'),
+        TemplateVariable("calls", "list", "List of call options with strike, bid, ask, mid, in_the_money", "[{strike: 680, bid: 5.20, ask: 5.40, ...}]"),
+        TemplateVariable("puts", "list", "List of put options with strike, bid, ask, mid, in_the_money", "[{strike: 680, bid: 4.80, ask: 5.00, ...}]"),
+        TemplateVariable("calls_count", "int", "Number of call options", "50"),
+        TemplateVariable("puts_count", "int", "Number of put options", "50"),
+    ]
 
     def fetch(self, signal, context: Dict[str, Any]) -> PrefetchResult:
         """Fetch option chain data."""

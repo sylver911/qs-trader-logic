@@ -22,9 +22,9 @@ Jinja2 template usage:
 
 import logging
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from domain.prefetches.base import Prefetch, PrefetchResult
+from domain.prefetches.base import Prefetch, PrefetchResult, TemplateVariable
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,17 @@ class VixPrefetch(Prefetch):
     description = "Current VIX volatility index"
     requires_ticker = False
     requires_broker = False  # Uses yfinance
+
+    TEMPLATE_DOCS: List[TemplateVariable] = [
+        TemplateVariable("value", "float", "Current VIX value", "18.50"),
+        TemplateVariable("level", "string", "VIX level: low (<15), normal (15-20), elevated (20-25), high (25-30), extreme (>30)", "normal"),
+        TemplateVariable("timestamp", "string", "ISO timestamp when VIX was fetched", "2025-12-15T10:30:00"),
+        TemplateVariable("is_low", "bool", "True if VIX < 15", "false"),
+        TemplateVariable("is_normal", "bool", "True if VIX 15-20", "true"),
+        TemplateVariable("is_elevated", "bool", "True if VIX 20-25", "false"),
+        TemplateVariable("is_high", "bool", "True if VIX 25-30", "false"),
+        TemplateVariable("is_extreme", "bool", "True if VIX >= 30", "false"),
+    ]
 
     def fetch(self, signal, context: Dict[str, Any]) -> PrefetchResult:
         """Fetch current VIX."""

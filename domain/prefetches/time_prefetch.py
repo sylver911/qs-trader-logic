@@ -21,10 +21,10 @@ Conditional example:
 """
 
 from datetime import datetime, date
-from typing import Any, Dict
+from typing import Any, Dict, List
 import pytz
 
-from domain.prefetches.base import Prefetch, PrefetchResult
+from domain.prefetches.base import Prefetch, PrefetchResult, TemplateVariable
 
 
 # NYSE Holiday Calendar 2024-2026
@@ -94,6 +94,19 @@ class TimePrefetch(Prefetch):
     description = "Current time in EST and NYSE market status"
     requires_ticker = False
     requires_broker = False
+
+    TEMPLATE_DOCS: List[TemplateVariable] = [
+        TemplateVariable("time_est", "string", "Current time in EST (HH:MM:SS)", "10:30:45"),
+        TemplateVariable("date", "string", "Current date (YYYY-MM-DD)", "2025-12-15"),
+        TemplateVariable("day_of_week", "string", "Day name", "Monday"),
+        TemplateVariable("timestamp", "string", "Full ISO timestamp", "2025-12-15T10:30:45-05:00"),
+        TemplateVariable("timezone", "string", "Timezone name", "US/Eastern (ET)"),
+        TemplateVariable("is_market_open", "bool", "NYSE is currently open", "true"),
+        TemplateVariable("market_status", "string", "Market status: open/closed", "open"),
+        TemplateVariable("status_reason", "string", "Reason: market_open, pre_market, after_hours, weekend, holiday", "market_open"),
+        TemplateVariable("closes_at", "string", "When market closes (if open)", "16:00 ET"),
+        TemplateVariable("opens_at", "string", "When market opens (if closed pre-market)", "09:30 ET"),
+    ]
 
     def fetch(self, signal, context: Dict[str, Any]) -> PrefetchResult:
         """Fetch current time and market status."""

@@ -219,11 +219,125 @@ class PrefetchManager:
                 return True
         return False
 
+    def get_all_docs(self) -> Dict[str, Any]:
+        """Get documentation for all prefetches.
+
+        Returns a structured dict with all prefetch documentation,
+        suitable for dashboard display and autocomplete.
+
+        Returns:
+            {
+                "prefetches": [
+                    {
+                        "key": "time",
+                        "name": "current_time",
+                        "description": "Current time in EST...",
+                        "variables": [
+                            {"name": "is_market_open", "type": "bool", "description": "...", "example": "true"},
+                            ...
+                        ],
+                        "example_usage": "{{ time.is_market_open }}"
+                    },
+                    ...
+                ],
+                "all_variables": [
+                    {"key": "time", "variable": "is_market_open", "type": "bool", "full_path": "time.is_market_open"},
+                    ...
+                ]
+            }
+        """
+        prefetch_docs = []
+        all_variables = []
+
+        for prefetch in self._prefetches:
+            doc = prefetch.get_docs()
+            prefetch_docs.append(doc)
+
+            # Flatten variables for autocomplete
+            for var in doc.get("variables", []):
+                all_variables.append({
+                    "key": prefetch.key,
+                    "variable": var["name"],
+                    "type": var["type"],
+                    "description": var["description"],
+                    "example": var["example"],
+                    "full_path": f"{prefetch.key}.{var['name']}",
+                    "jinja_syntax": f"{{{{ {prefetch.key}.{var['name']} }}}}",
+                })
+
+        return {
+            "prefetches": prefetch_docs,
+            "all_variables": all_variables,
+            "count": len(prefetch_docs),
+            "variable_count": len(all_variables),
+        }
+
 
 # Convenience function
 def fetch_all(signal: "Signal", context: Dict[str, Any]) -> PrefetchContext:
     """Convenience function to fetch all data."""
     return PrefetchManager().fetch_all(signal, context)
+
+
+def get_all_docs() -> Dict[str, Any]:
+    """Get documentation for all prefetches."""
+    return PrefetchManager().get_all_docs()
+
+
+def sync_docs_to_redis(redis_client=None) -> bool:
+    """Sync prefetch documentation to Redis for dashboard access.
+
+    Stores documentation at: config:prefetch_docs
+
+    Args:
+        redis_client: Optional Redis client. If None, creates one from settings.
+
+    Returns:
+        True if sync successful, False otherwise.
+
+    Dashboard Usage:
+        ```python
+        import json
+        from django.conf import settings
+        import redis
+
+        r = redis.from_url(settings.REDIS_URL)
+        docs = json.loads(r.get("config:prefetch_docs"))
+
+        # Access prefetches
+        for prefetch in docs["prefetches"]:
+            print(f"{prefetch['key']}: {prefetch['description']}")
+            for var in prefetch["variables"]:
+                print(f"  {{ {prefetch['key']}.{var['name']} }} - {var['description']}")
+
+        # For autocomplete, use all_variables
+        for var in docs["all_variables"]:
+            # var["jinja_syntax"] = "{{ time.is_market_open }}"
+            # var["description"] = "NYSE is currently open"
+        ```
+    """
+    import json
+
+    try:
+        if redis_client is None:
+            import redis
+            import os
+            redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+            redis_client = redis.from_url(redis_url)
+
+        docs = get_all_docs()
+        docs["synced_at"] = __import__("datetime").datetime.now().isoformat()
+
+        redis_client.set(
+            "config:prefetch_docs",
+            json.dumps(docs, ensure_ascii=False),
+        )
+        logger.info(f"Synced prefetch docs to Redis: {docs['count']} prefetches, {docs['variable_count']} variables")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to sync prefetch docs to Redis: {e}")
+        return False
 
 
 __all__ = [
@@ -232,6 +346,8 @@ __all__ = [
     "PrefetchContext",
     "PrefetchManager",
     "fetch_all",
+    "get_all_docs",
+    "sync_docs_to_redis",
     "ALL_PREFETCHES",
     # Individual prefetches
     "TimePrefetch",

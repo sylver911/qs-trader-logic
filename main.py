@@ -18,6 +18,7 @@ from infrastructure.queue.redis_consumer import RedisConsumer
 from infrastructure.broker.ibkr_client import IBKRBroker
 from domain.services.trading_service import TradingService
 from domain.services.order_monitor import init_order_monitor
+from domain.prefetches import sync_docs_to_redis
 from utils.logging_config import setup_logging
 
 logger = setup_logging(
@@ -63,6 +64,9 @@ def main() -> int:
     logger.info(f"Max VIX: {params['max_vix_level']}")
     logger.info(f"Min Confidence: {params['min_ai_confidence_score']:.0%}")
     # Note: Ticker whitelists are now per-strategy in StrategyConfig
+
+    # Sync prefetch documentation to Redis for dashboard
+    sync_docs_to_redis()
 
     # Initialize services
     trading_service = TradingService()

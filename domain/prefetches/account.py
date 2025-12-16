@@ -20,9 +20,9 @@ Jinja2 template usage:
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
-from domain.prefetches.base import Prefetch, PrefetchResult
+from domain.prefetches.base import Prefetch, PrefetchResult, TemplateVariable
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,14 @@ class AccountPrefetch(Prefetch):
     description = "Account balance and buying power"
     requires_ticker = False
     requires_broker = True
+
+    TEMPLATE_DOCS: List[TemplateVariable] = [
+        TemplateVariable("available", "float", "Available cash for trading (USD)", "10000.00"),
+        TemplateVariable("buying_power", "float", "Total buying power (USD)", "20000.00"),
+        TemplateVariable("net_liquidation", "float", "Net liquidation value (USD)", "50000.00"),
+        TemplateVariable("currency", "string", "Account currency", "USD"),
+        TemplateVariable("is_simulated", "bool", "True if in dry run mode", "false"),
+    ]
 
     def fetch(self, signal, context: Dict[str, Any]) -> PrefetchResult:
         """Fetch account summary."""

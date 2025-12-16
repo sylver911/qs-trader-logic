@@ -300,3 +300,180 @@ class MyPrefetch(Prefetch):
         })
 ```
 3. Regisztrálás: `domain/prefetches/__init__.py` → `ALL_PREFETCHES` lista
+
+---
+
+## Dashboard Integráció
+
+A prefetch dokumentáció automatikusan szinkronizálódik Redis-be a trading service indításakor.
+
+### Redis Kulcs
+
+```
+config:prefetch_docs
+```
+
+### Dokumentáció Formátum
+
+```json
+{
+  "prefetches": [
+    {
+      "key": "time",
+      "name": "current_time",
+      "description": "Current time in EST and NYSE market status",
+      "variables": [
+        {
+          "name": "is_market_open",
+          "type": "bool",
+          "description": "NYSE is currently open",
+          "example": "true"
+        }
+      ],
+      "example_usage": "{{ time.is_market_open }}\n{{ time.time_est }}\n{{ time.date }}"
+    }
+  ],
+  "all_variables": [
+    {
+      "key": "time",
+      "variable": "is_market_open",
+      "type": "bool",
+      "description": "NYSE is currently open",
+      "example": "true",
+      "full_path": "time.is_market_open",
+      "jinja_syntax": "{{ time.is_market_open }}"
+    }
+  ],
+  "count": 5,
+  "variable_count": 35,
+  "synced_at": "2025-12-15T10:30:00"
+}
+```
+
+### Django Dashboard Használat
+
+```python
+# views.py
+import json
+import redis
+from django.conf import settings
+
+def get_prefetch_docs():
+    """Fetch prefetch documentation from Redis."""
+    r = redis.from_url(settings.REDIS_URL)
+    docs_json = r.get("config:prefetch_docs")
+    if docs_json:
+        return json.loads(docs_json)
+    return None
+
+def prompt_editor_view(request):
+    docs = get_prefetch_docs()
+    return render(request, 'prompt_editor.html', {
+        'prefetch_docs': docs,
+    })
+```
+
+### Autocomplete JavaScript
+
+```javascript
+// prompt_editor.js
+const prefetchDocs = JSON.parse('{{ prefetch_docs|safe }}');
+
+// Flatten for autocomplete
+const suggestions = prefetchDocs.all_variables.map(v => ({
+    text: v.jinja_syntax,          // "{{ time.is_market_open }}"
+    displayText: v.full_path,      // "time.is_market_open"
+    description: v.description,    // "NYSE is currently open"
+    type: v.type,                  // "bool"
+}));
+
+// When user types "{{" show suggestions
+editor.on('change', (cm, change) => {
+    if (change.text[0] === '{' && cm.getLine(change.from.line).endsWith('{{')) {
+        cm.showHint({
+            hint: () => ({
+                list: suggestions.filter(s =>
+                    s.displayText.includes(cm.getSelection())
+                ),
+                from: change.from,
+                to: change.to
+            })
+        });
+    }
+});
+```
+
+### Prefetch Dokumentáció Panel (HTML)
+
+```html
+<!-- prompt_editor.html -->
+<div class="prefetch-docs-panel">
+    <h3>Available Variables</h3>
+
+    {% for prefetch in prefetch_docs.prefetches %}
+    <div class="prefetch-group">
+        <h4>{{ prefetch.key }}</h4>
+        <p class="description">{{ prefetch.description }}</p>
+
+        <table class="variables-table">
+            <tr>
+                <th>Variable</th>
+                <th>Type</th>
+                <th>Description</th>
+                <th>Example</th>
+            </tr>
+            {% for var in prefetch.variables %}
+            <tr class="variable-row" data-jinja="{{ prefetch.key }}.{{ var.name }}">
+                <td><code>{{ var.name }}</code></td>
+                <td><span class="type-badge type-{{ var.type }}">{{ var.type }}</span></td>
+                <td>{{ var.description }}</td>
+                <td><code>{{ var.example }}</code></td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endfor %}
+</div>
+
+<style>
+.variable-row { cursor: pointer; }
+.variable-row:hover { background: #f5f5f5; }
+.type-badge { padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+.type-bool { background: #e3f2fd; color: #1976d2; }
+.type-string { background: #e8f5e9; color: #388e3c; }
+.type-float, .type-int { background: #fff3e0; color: #f57c00; }
+.type-list { background: #f3e5f5; color: #7b1fa2; }
+</style>
+
+<script>
+// Click to insert
+document.querySelectorAll('.variable-row').forEach(row => {
+    row.addEventListener('click', () => {
+        const jinja = `{{ ${row.dataset.jinja} }}`;
+        editor.replaceSelection(jinja);
+        editor.focus();
+    });
+});
+</script>
+```
+
+### Manuális Sync (CLI)
+
+```bash
+# Sync prefetch docs manually
+python -c "from domain.prefetches import sync_docs_to_redis; sync_docs_to_redis()"
+```
+
+### API Endpoint (Optional)
+
+```python
+# api/views.py
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+
+@api_view(['GET'])
+def prefetch_docs(request):
+    """Return prefetch documentation for prompt editor."""
+    docs = get_prefetch_docs()
+    return Response(docs)
+```
